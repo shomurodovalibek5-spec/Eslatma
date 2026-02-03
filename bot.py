@@ -233,21 +233,28 @@ class Database:
         self.conn.commit()
 
     # --- REMINDERS ---
-    def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
-        try:
-            logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
-            logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
-            logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
-            
-            self.cursor.execute('INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)', 
-                             (user_id, title, description, reminder_time, repeat_type))
-            self.conn.commit()
-            rid = self.cursor.lastrowid
-            logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
-            return rid
-        except Exception as e:
-            logger.error(f"Reminder add error: {e}")
-            return None
+def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
+    try:
+        # Agar vaqt zonasiz kelsa — majburan qo‘shamiz
+        if reminder_time.tzinfo is None:
+            reminder_time = reminder_time.replace(tzinfo=TIMEZONE)
+            logger.warning("[FIX] reminder_time ga majburan Asia/Tashkent qo‘shildi")
+
+        logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
+        logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
+        logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
+
+        self.cursor.execute(
+            'INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)',
+            (user_id, title, description, reminder_time, repeat_type)
+        )
+        self.conn.commit()
+        rid = self.cursor.lastrowid
+        logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
+        return rid
+    except Exception as e:
+        logger.error(f"Reminder add error: {e}")
+        return None
 
     def update_reminder_time(self, rid: int, new_time: datetime):
         try:
