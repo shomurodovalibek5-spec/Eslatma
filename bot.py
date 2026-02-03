@@ -31,12 +31,32 @@ logger = logging.getLogger(__name__)
 
 # ==================== DATABASE ====================
 # RENDER UCHUN: /tmp/ ichida saqlash kerak, chunki har restartda fayllar o'chadi
-DB_NAME = 'smart_assistant.db'  # BU MUHIM O'ZGARISH!
+DB_NAME = 'smart_assistant.db'
+
+# Python 3.12+ uchun datetime adapter sozlamalari
+def adapt_datetime(dt):
+    return dt.isoformat()
+
+def convert_datetime(text):
+    try:
+        return datetime.fromisoformat(text.decode())
+    except ValueError as e:
+        logger.warning(f"Invalid datetime format: {text!r} - {e}. Using fallback.")
+        return datetime.now()  # Fallback to current time to avoid unpack errors
+
+# Faqat shu ikki qatorni saqlang (qolganini o'chirib tashlang)
+sqlite3.register_adapter(datetime, lambda dt: dt.isoformat())
+sqlite3.register_converter("datetime", lambda b: datetime.fromisoformat(b.decode("utf-8")))
+sqlite3.register_converter("timestamp", lambda b: datetime.fromisoformat(b.decode("utf-8")))
 
 class Database:
     def __init__(self):
-        # Oddiy connection
-        self.conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+        # DateTime converter bilan connection
+        self.conn = sqlite3.connect(
+            DB_NAME, 
+            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            check_same_thread=False
+        )
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
         self.init_tables()
@@ -53,8 +73,8 @@ class Database:
                 language TEXT DEFAULT "uz",
                 currency TEXT DEFAULT "UZS",
                 is_admin BOOLEAN DEFAULT 0,
-                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -65,10 +85,10 @@ class Database:
                 user_id INTEGER,
                 title TEXT NOT NULL,
                 description TEXT,
-                reminder_time TIMESTAMP NOT NULL,
+                reminder_time DATETIME NOT NULL,
                 status TEXT DEFAULT "active",
                 repeat_type TEXT DEFAULT "none",
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -82,11 +102,11 @@ class Database:
                 category TEXT NOT NULL,
                 description TEXT,
                 expense_date DATE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
-
+        
         # Income
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS income (
@@ -96,7 +116,7 @@ class Database:
                 category TEXT NOT NULL,
                 description TEXT,
                 income_date DATE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -110,7 +130,7 @@ class Database:
                 activity_time TIME,
                 activity_date DATE NOT NULL,
                 status TEXT DEFAULT "pending",
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -124,7 +144,7 @@ class Database:
                 monthly_limit DECIMAL(10, 2) NOT NULL,
                 current_spent DECIMAL(10, 2) DEFAULT 0,
                 month_year TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 UNIQUE(user_id, category, month_year)
             )
@@ -140,8 +160,8 @@ class Database:
                 debt_type TEXT NOT NULL, 
                 description TEXT,
                 status TEXT DEFAULT 'active', 
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                return_date TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                return_date DATETIME,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -364,12 +384,8 @@ class Database:
         user = self.cursor.fetchone()
         if not user: return None
         summary = self.get_financial_summary(user_id)
-        debts = self.db_get_user_debts_by_id(user_id)
+        debts = self.get_user_debts(user_id)
         return {'user': dict(user), 'finance': summary, 'debts': debts}
-    
-    def db_get_user_debts_by_id(self, user_id: int):
-        self.cursor.execute('SELECT * FROM debts WHERE user_id = ? AND status = "active"', (user_id,))
-        return [dict(row) for row in self.cursor.fetchall()]
 
     def get_bot_stats(self):
         self.cursor.execute('SELECT COUNT(*) as c FROM users')
@@ -388,7 +404,6 @@ class Database:
         self.conn.close()
 
 # ==================== SCHEDULER ====================
-# RENDER DA MUHIM: Scheduler ishlamay qolishi mumkin, chunki background thread lar cheklangan
 class ReminderScheduler:
     def __init__(self, db):
         self.db = db
@@ -466,7 +481,7 @@ class ReminderScheduler:
             self.db.cursor.execute('SELECT reminder_time FROM reminders WHERE id = ?', (rid,))
             old_time_res = self.db.cursor.fetchone()
             if old_time_res:
-                old_time = datetime.strptime(old_time_res['reminder_time'], "%Y-%m-%d %H:%M:%S")
+                old_time = old_time_res['reminder_time']
                 next_time = old_time + timedelta(days=1)
                 self.db.update_reminder_time(rid, next_time)
         else:
@@ -826,6 +841,25 @@ class SmartAssistantBot:
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
                 context.user_data['action'] = 'DELETE_REMINDER'
 
+        # ================= YORDAM / SOS TUGMASI =================
+        elif text == "🆘 YORDAM":
+            help_text = """
+🆘 *YORDAM MENYUSI*
+
+Botdan foydalanish bo'yicha qo'llanma:
+- ➕ ESLATMA: Yangi eslatma qo'shish
+- 💰 XARAJAT: Xarajatlarni kiritish
+- 💵 DAROMAD: Daromadlarni kiritish
+- 📅 VAZIFA: Kunlik vazifalarni boshqarish
+- 💸 QARZLARIM: Qarzlarni kuzatish
+- 🎯 BYUDJET: Byudjetni belgilash
+- 📊 HISOBOT: Moliyaviy hisobot
+- ⚙️ SOZLAMALAR: Til va valyutani o'zgartirish
+
+Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning.
+            """
+            await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+
         else:
             action = context.user_data.get('action')
             
@@ -952,31 +986,47 @@ def home():
 def health():
     return "OK", 200
 
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def webhook():
-    """Telegram webhook handler"""
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    telegram_app.update_queue.put(update)
-    return 'OK', 200
-
-# ==================== POLLING (FLEKS) REJIMI ====================
-def start_polling():
-    """Polling ni background da ishga tushirish"""
-    telegram_app.run_polling(
-        drop_pending_updates=True,
-        timeout=30,
-    )
-
-# Background thread da polling ni ishga tushirish
-polling_thread = threading.Thread(target=start_polling, daemon=True)
-polling_thread.start()
-
-# ==================== MAIN ====================
+# ==================== ASOSIY ISHGA TUSHIRISH ====================
 if __name__ == '__main__':
-    # Flask server ni ishga tushirish
-    port = int(os.environ.get('PORT', 8443))
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=False
-    )
+    import signal
+    
+    # Signal handler sozlamalari (Python 3.13 uchun)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    
+    port = int(os.environ.get('PORT', 10000))
+    
+    # Flask ni background threadda ishga tushirish
+    def run_flask():
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=port, threads=1)
+    
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    print(f"🌐 Flask server: http://0.0.0.0:{port}")
+    print("🤖 Telegram bot polling ishga tushmoqda...")
+    
+    # Botni asosiy threadda ishga tushirish
+    try:
+        telegram_app.run_polling(
+            drop_pending_updates=True,
+            timeout=30,
+            close_loop=False,
+            stop_signals=[],
+            bootstrap_retries=-1,
+            allowed_updates=['message', 'callback_query']
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 Bot to'xtatildi")
+    except Exception as e:
+        print(f"❌ Xato: {e}")
+        # Qayta urinish
+        import time
+        time.sleep(5)
+        telegram_app.run_polling(
+            drop_pending_updates=True,
+            timeout=30,
+            close_loop=False,
+            stop_signals=[]
+        )
