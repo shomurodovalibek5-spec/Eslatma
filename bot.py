@@ -29,7 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== DATABASE ====================
-DB_NAME = 'smart_assistant.db'
+# RENDER UCHUN: /tmp/ ichida saqlash kerak, chunki har restartda fayllar o'chadi
+DB_NAME = '/tmp/smart_assistant.db'  # BU MUHIM O'ZGARISH!
 
 class Database:
     def __init__(self):
@@ -384,6 +385,7 @@ class Database:
         self.conn.close()
 
 # ==================== SCHEDULER ====================
+# RENDER DA MUHIM: Scheduler ishlamay qolishi mumkin, chunki background thread lar cheklangan
 class ReminderScheduler:
     def __init__(self, db):
         self.db = db
@@ -921,21 +923,32 @@ def main():
     bot_instance = SmartAssistantBot()
     
     app.add_handler(CommandHandler("start", bot_instance.start))
-    app.add_handler(CommandHandler("admin", bot_instance.force_admin))  # yangi admin buyrug'i
+    app.add_handler(CommandHandler("admin", bot_instance.force_admin))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_instance.handle_message))
     
     db = Database()
     scheduler = ReminderScheduler(db)
     scheduler.start()
     
-    print("🤖 Bot ishga tushmoqda...")
+    print("🤖 Bot Render da ishga tushmoqda...")
     print(f"👑 Admin ID: {ADMIN_IDS[0]}")
-    print("➡️ Botni ishga tushirish uchun:")
-    print("1. /admin buyrug'ini yuboring")
-    print("2. /start buyrug'ini yuboring")
-    print("3. Endi '👑 ADMIN PANEL' tugmasi ko'rinishi kerak")
+    print("🌐 Webhook rejimida ishlayapti...")
     
-    app.run_polling()
+    # ============ RENDER UCHUN WEBHOOK ============
+    PORT = int(os.environ.get('PORT', 8443))
+    
+    # APPNI NOMINI O'ZGARTIRING!
+    # Render Dashboard da ko'rgan app namingizni yozing
+    APP_NAME = "eslatma-p694"  # ⬅️ BU YERNI O'ZGARTIRING!
+    
+    # Webhook ni sozlash
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}"
+    )
+    # ============================================
 
 if __name__ == '__main__':
     main()
