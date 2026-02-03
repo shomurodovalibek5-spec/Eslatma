@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, date
 from decimal import Decimal, InvalidOperation
 import threading
 import time
+from flask import Flask, request
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -30,14 +31,16 @@ logger = logging.getLogger(__name__)
 
 # ==================== DATABASE ====================
 # RENDER UCHUN: /tmp/ ichida saqlash kerak, chunki har restartda fayllar o'chadi
-DB_NAME = '/tmp/smart_assistant.db'  # BU MUHIM O'ZGARISH!
+DB_NAME = 'smart_assistant.db'  # BU MUHIM O'ZGARISH!
 
 class Database:
     def __init__(self):
+        # Oddiy connection
         self.conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
         self.init_tables()
+        logger.info(f"Database ochildi: {DB_NAME}")
     
     def init_tables(self):
         # Users
@@ -918,37 +921,62 @@ class SmartAssistantBot:
             else:
                 await update.message.reply_text("Buyruq aniqlanmadi. Menyuni tanlang.")
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    bot_instance = SmartAssistantBot()
-    
-    app.add_handler(CommandHandler("start", bot_instance.start))
-    app.add_handler(CommandHandler("admin", bot_instance.force_admin))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_instance.handle_message))
-    
-    db = Database()
-    scheduler = ReminderScheduler(db)
-    scheduler.start()
-    
-    print("🤖 Bot Render da ishga tushmoqda...")
-    print(f"👑 Admin ID: {ADMIN_IDS[0]}")
-    print("🌐 Webhook rejimida ishlayapti...")
-    
-    # ============ RENDER UCHUN WEBHOOK ============
-    PORT = int(os.environ.get('PORT', 8443))
-    
-    # APPNI NOMINI O'ZGARTIRING!
-    # Render Dashboard da ko'rgan app namingizni yozing
-    APP_NAME = "eslatma-p694"  # ⬅️ BU YERNI O'ZGARTIRING!
-    
-    # Webhook ni sozlash
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"https://{APP_NAME}.onrender.com/{BOT_TOKEN}"
-    )
-    # ============================================
+# ==================== FLASK APP ====================
+app = Flask(__name__)
 
+# Bot obyektini yaratish
+bot_instance = SmartAssistantBot()
+
+# Application yaratish
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+
+# Handlers qo'shish
+telegram_app.add_handler(CommandHandler("start", bot_instance.start))
+telegram_app.add_handler(CommandHandler("admin", bot_instance.force_admin))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_instance.handle_message))
+
+# Database va scheduler
+db = Database()
+scheduler = ReminderScheduler(db)
+scheduler.start()
+
+print("🤖 Bot Flask + Polling rejimida ishga tushmoqda...")
+print(f"👑 Admin ID: {ADMIN_IDS[0]}")
+
+# ==================== FLASK ENDPOINTS ====================
+@app.route('/')
+def home():
+    return "🤖 Smart Assistant Bot ishlayapti! ✅"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+@app.route('/' + BOT_TOKEN, methods=['POST'])
+def webhook():
+    """Telegram webhook handler"""
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    telegram_app.update_queue.put(update)
+    return 'OK', 200
+
+# ==================== POLLING (FLEKS) REJIMI ====================
+def start_polling():
+    """Polling ni background da ishga tushirish"""
+    telegram_app.run_polling(
+        drop_pending_updates=True,
+        timeout=30,
+    )
+
+# Background thread da polling ni ishga tushirish
+polling_thread = threading.Thread(target=start_polling, daemon=True)
+polling_thread.start()
+
+# ==================== MAIN ====================
 if __name__ == '__main__':
-    main()
+    # Flask server ni ishga tushirish
+    port = int(os.environ.get('PORT', 8443))
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=False
+    )
