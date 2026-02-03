@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 import threading
 import time
 from flask import Flask, request
+from zoneinfo import ZoneInfo  # Vaqt zonasi uchun
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -17,6 +18,9 @@ from telegram.constants import ParseMode
 # ==================== KONFIGURATSIYA ====================
 BOT_TOKEN = "8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw" 
 ADMIN_IDS = [8014950410]
+
+# Vaqt zonasi: Asia/Tashkent (UTC+5)
+TIMEZONE = ZoneInfo("Asia/Tashkent")
 
 # ==================== LOG SOZLAMALARI ====================
 logging.basicConfig(
@@ -179,7 +183,7 @@ class Database:
             self.cursor.execute('''
                 INSERT OR IGNORE INTO users (telegram_id, username, full_name, is_admin, last_seen) 
                 VALUES (?, ?, ?, ?, ?)
-            ''', (telegram_id, username, full_name, is_admin, datetime.now()))
+            ''', (telegram_id, username, full_name, is_admin, datetime.now(TIMEZONE)))
             
             # Admin holatini yangilash (agar ADMIN_IDS da bo'lsa)
             if telegram_id in ADMIN_IDS:
@@ -187,14 +191,14 @@ class Database:
                     UPDATE users 
                     SET username = ?, full_name = ?, is_admin = 1, last_seen = ? 
                     WHERE telegram_id = ?
-                ''', (username, full_name, datetime.now(), telegram_id))
+                ''', (username, full_name, datetime.now(TIMEZONE), telegram_id))
             else:
                 # Oddiy foydalanuvchi uchun faqat last_seen ni yangilash
                 self.cursor.execute('''
                     UPDATE users 
                     SET username = ?, full_name = ?, last_seen = ? 
                     WHERE telegram_id = ?
-                ''', (username, full_name, datetime.now(), telegram_id))
+                ''', (username, full_name, datetime.now(TIMEZONE), telegram_id))
             
             self.conn.commit()
             return is_admin
@@ -231,10 +235,16 @@ class Database:
     # --- REMINDERS ---
     def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
         try:
+            logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
+            logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
+            logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
+            
             self.cursor.execute('INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)', 
                              (user_id, title, description, reminder_time, repeat_type))
             self.conn.commit()
-            return self.cursor.lastrowid
+            rid = self.cursor.lastrowid
+            logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
+            return rid
         except Exception as e:
             logger.error(f"Reminder add error: {e}")
             return None
@@ -313,7 +323,7 @@ class Database:
 
     def close_debt(self, debt_id: int, user_id: int):
         self.cursor.execute('UPDATE debts SET status = "returned", return_date = ? WHERE id = ? AND user_id = ?', 
-                         (datetime.now(), debt_id, user_id))
+                         (datetime.now(TIMEZONE), debt_id, user_id))
         self.conn.commit()
 
     # --- ACTIVITIES ---
@@ -418,7 +428,9 @@ class ReminderScheduler:
     def _check(self):
         while self.running:
             try:
-                now = datetime.now()
+                now = datetime.now(TIMEZONE)
+                logger.info(f"[SCHEDULER] {now.strftime('%Y-%m-%d %H:%M:%S')} → tekshiruv boshlandi")
+
                 self.db.cursor.execute('''
                     SELECT r.*, u.telegram_id FROM reminders r
                     JOIN users u ON r.user_id = u.id
@@ -426,9 +438,12 @@ class ReminderScheduler:
                 ''', (now,))
                 rows = self.db.cursor.fetchall()
                 
+                logger.info(f"[SCHEDULER] Topildi: {len(rows)} ta eslatma")
+                
                 for row in rows:
                     r = dict(row)
                     msg = f"🔔 *ESLATMA: {r['title']}*\n📝 {r['description']}\n⏰ {r['reminder_time']}"
+                    logger.info(f" → Yuborilishi kerak: {r['title']} | vaqt: {r['reminder_time']} | chat_id: {r['telegram_id']}")
                     self._send_in_thread(r['telegram_id'], msg, r['id'], r['repeat_type'])
                 
                 if now.hour == 20 and now.minute == 0:
@@ -475,7 +490,11 @@ class ReminderScheduler:
     async def _send(self, chat_id, text, rid, repeat_type):
         from telegram import Bot
         bot = Bot(token=BOT_TOKEN)
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        try:
+            await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            logger.info(f"[SUCCESS] {chat_id} ga yuborildi: {text}")
+        except Exception as e:
+            logger.error(f"[SEND ERROR] {chat_id} → {e}")
         
         if repeat_type == 'daily':
             self.db.cursor.execute('SELECT reminder_time FROM reminders WHERE id = ?', (rid,))
@@ -732,10 +751,10 @@ class SmartAssistantBot:
                 await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_main_keyboard(uid))
                 return
             try:
-                time_obj = datetime.strptime(text, "%H:%M")
-                now = date.today()
-                rem_time = datetime.combine(now, time_obj.time())
-                if rem_time < datetime.now(): 
+                time_obj = datetime.strptime(text, "%H:%M").time()
+                now = datetime.now(TIMEZONE)
+                rem_time = datetime.combine(now.date(), time_obj, tzinfo=TIMEZONE)
+                if rem_time < now: 
                     rem_time += timedelta(days=1)
                 context.user_data['rem_time'] = rem_time
                 context.user_data['rem_step'] = 3
