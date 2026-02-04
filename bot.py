@@ -233,28 +233,23 @@ class Database:
         self.conn.commit()
 
     # --- REMINDERS ---
-def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
-    try:
-        # Agar vaqt zonasiz kelsa — majburan qo‘shamiz
-        if reminder_time.tzinfo is None:
-            reminder_time = reminder_time.replace(tzinfo=TIMEZONE)
-            logger.warning("[FIX] reminder_time ga majburan Asia/Tashkent qo‘shildi")
-
-        logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
-        logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
-        logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
-
-        self.cursor.execute(
-            'INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)',
-            (user_id, title, description, reminder_time, repeat_type)
-        )
-        self.conn.commit()
-        rid = self.cursor.lastrowid
-        logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
-        return rid
-    except Exception as e:
-        logger.error(f"Reminder add error: {e}")
-        return None
+    def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
+        try:
+            if reminder_time.tzinfo is None:
+                reminder_time = reminder_time.replace(tzinfo=TIMEZONE)
+            logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
+            logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
+            logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
+            
+            self.cursor.execute('INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)', 
+                             (user_id, title, description, reminder_time, repeat_type))
+            self.conn.commit()
+            rid = self.cursor.lastrowid
+            logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
+            return rid
+        except Exception as e:
+            logger.error(f"Reminder add error: {e}")
+            return None
 
     def update_reminder_time(self, rid: int, new_time: datetime):
         try:
@@ -594,9 +589,10 @@ class SmartAssistantBot:
         # Admin statusini yangi funksiya orqali tekshirish
         is_admin_status = self.is_user_admin(uid)
         
+        logger.info(f"[MESSAGE] Foydalanuvchi: {uid}, Matn: {text}, User_data: {context.user_data}")
+        
         if text == "🔙 ORQAGA":
             context.user_data.clear()
-            # Asosiy menyuga qaytish (Admin o'z hisobiga ishlashi uchun)
             await update.message.reply_text("Asosiy menyu", reply_markup=self.get_main_keyboard(uid))
             return
 
@@ -720,18 +716,22 @@ class SmartAssistantBot:
                 return
 
         # ================= SOZLAMALAR =================
-        if text == "🗑️ BARCHASINI O'CHIRISH":
+        if text == "🗑️ Barchasini o'chirish":
             await update.message.reply_text("⚠️ Barcha ma'lumot o'chirilsinmi? `HA` / `YO'Q`", parse_mode=ParseMode.MARKDOWN)
             context.user_data['action'] = 'CONFIRM_CLEAR'
+            return
         elif text == "💱 Valyuta: UZS":
             self.db.update_user_settings(user_id, currency='UZS')
-            await update.message.reply_text("✅ Valyuta: O'zbek So'mi (UZS)")
+            await update.message.reply_text("✅ Valyuta: O'zbek So'mi (UZS)", reply_markup=self.get_settings_keyboard())
+            return
         elif text == "🇺🇿 O'zbek tili":
             self.db.update_user_settings(user_id, lang='uz')
-            await update.message.reply_text("✅ Til o'zgartirildi: O'zbek tili")
+            await update.message.reply_text("✅ Til o'zgartirildi: O'zbek tili", reply_markup=self.get_settings_keyboard())
+            return
         elif text == "🇬🇧 English":
             self.db.update_user_settings(user_id, lang='en')
-            await update.message.reply_text("✅ Language changed: English")
+            await update.message.reply_text("✅ Language changed: English", reply_markup=self.get_settings_keyboard())
+            return
 
         # ================= ESLATMA QO'SHISH =================
         elif text == "➕ ESLATMA":
@@ -741,51 +741,55 @@ class SmartAssistantBot:
                 reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
             return
 
-        if context.user_data.get('rem_step') == 1:
+        if 'rem_step' in context.user_data:
+            step = context.user_data['rem_step']
             if text == "🔙 Bekor qilish":
                 context.user_data.clear()
                 await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_main_keyboard(uid))
                 return
-            context.user_data['rem_title'] = text
-            context.user_data['rem_step'] = 2
-            await update.message.reply_text(f"2-qadam. Eslatma *vaqtini* yozing (HH:MM):\nMasalan: 14:30", 
-                                          reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
-            return
-
-        if context.user_data.get('rem_step') == 2:
-            if text == "🔙 Bekor qilish":
-                context.user_data.clear()
-                await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_main_keyboard(uid))
+            
+            if step == 1:
+                context.user_data['rem_title'] = text
+                context.user_data['rem_step'] = 2
+                await update.message.reply_text(f"2-qadam. Eslatma *vaqtini* yozing (HH:MM):\nMasalan: 14:30", 
+                                              reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
                 return
-            try:
-                time_obj = datetime.strptime(text, "%H:%M").time()
-                now = datetime.now(TIMEZONE)
-                rem_time = datetime.combine(now.date(), time_obj, tzinfo=TIMEZONE)
-                if rem_time < now: 
-                    rem_time += timedelta(days=1)
-                context.user_data['rem_time'] = rem_time
-                context.user_data['rem_step'] = 3
-                await update.message.reply_text("3-qadam. Qachon eslatilsin?", 
-                                              reply_markup=ReplyKeyboardMarkup([["🔁 Har kuni", "📅 Bugun"], ["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
-            except ValueError:
-                await update.message.reply_text("❌ Vaqt formati noto'g'ri. `HH:MM`")
-            return
-
-        if context.user_data.get('rem_step') == 3:
-            if text == "🔙 Bekor qilish":
+            
+            if step == 2:
+                try:
+                    time_obj = datetime.strptime(text, "%H:%M").time()
+                    now = datetime.now(TIMEZONE)
+                    rem_time = datetime.combine(now.date(), time_obj, tzinfo=TIMEZONE)
+                    if rem_time < now: 
+                        rem_time += timedelta(days=1)
+                    context.user_data['rem_time'] = rem_time
+                    context.user_data['rem_step'] = 3
+                    await update.message.reply_text("3-qadam. Qachon eslatilsin?", 
+                                                  reply_markup=ReplyKeyboardMarkup([["🔁 Har kuni", "📅 Bugun"], ["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+                    return
+                except ValueError:
+                    await update.message.reply_text("❌ Vaqt formati noto'g'ri. `HH:MM`", reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True))
+                    return
+            
+            if step == 3:
+                if text == "🔁 Har kuni":
+                    repeat = "daily"
+                elif text == "📅 Bugun":
+                    repeat = "none"
+                else:
+                    await update.message.reply_text("Iltimos, variantni tanlang.", reply_markup=ReplyKeyboardMarkup([["🔁 Har kuni", "📅 Bugun"], ["🔙 Bekor qilish"]], resize_keyboard=True))
+                    return
+                title = context.user_data.get('rem_title')
+                rtime = context.user_data.get('rem_time')
+                if self.db.add_reminder(user_id, title, "", rtime, repeat):
+                    msg = f"✅ *Eslatma saqlandi!*\n\n📌 {title}\n⏰ {rtime.strftime('%d.%m %H:%M')}"
+                    if repeat == 'daily': 
+                        msg += "\n🔁 Har kuni takrorlanadi"
+                    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_main_keyboard(uid))
+                else:
+                    await update.message.reply_text("❌ Xatolik yuz berdi.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data.clear()
-                await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_main_keyboard(uid))
                 return
-            repeat = "daily" if text == "🔁 Har kuni" else "none"
-            title = context.user_data.get('rem_title')
-            rtime = context.user_data.get('rem_time')
-            if self.db.add_reminder(user_id, title, "", rtime, repeat):
-                msg = f"✅ *Eslatma saqlandi!*\n\n📌 {title}\n⏰ {rtime.strftime('%d.%m %H:%M')}"
-                if repeat == 'daily': 
-                    msg += "\n🔁 Har kuni takrorlanadi"
-                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_main_keyboard(uid))
-            context.user_data.clear()
-            return
 
         # ================= OTHER FEATURES =================
         elif text == "💸 QARZLARIM":
@@ -803,21 +807,21 @@ class SmartAssistantBot:
                 context.user_data['action'] = 'RETURN_DEBT'
         
         elif text == "➕ QARZ QO'SHISH":
-            await update.message.reply_text("🆕 *QARZ QO'SHISH*\n\nFormat: `Ism | Miqdor | Turi`\nTuri: `berdim` yoki `oldim`\nNamuna: `Ali | 500000 | berdim`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("🆕 *QARZ QO'SHISH*\n\nFormat: `Ism | Miqdor | Turi`\nTuri: `berdim` yoki `oldim`\nNamuna: `Ali | 500000 | berdim`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_DEBT'
 
         elif text == "💰 XARAJAT":
-            await update.message.reply_text("💰 *XARAJAT QO'SHISH*\n\nFormat: `Miqdor | Kategoriya | Tavsif`\nNamuna: `50000 | Taom | Lagmon`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("💰 *XARAJAT QO'SHISH*\n\nFormat: `Miqdor | Kategoriya | Tavsif`\nNamuna: `50000 | Taom | Lagmon`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_EXPENSE'
 
         elif text == "💵 DAROMAD":
-            await update.message.reply_text("💵 *DAROMAD QO'SHISH*\n\nFormat: `Miqdor | Manba | Tavsif`\nNamuna: `1000000 | Oylik Maosh | IT`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("💵 *DAROMAD QO'SHISH*\n\nFormat: `Miqdor | Manba | Tavsif`\nNamuna: `1000000 | Oylik Maosh | IT`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_INCOME'
         
         elif text == "📊 HISOBOT":
             summary = self.db.get_financial_summary(user_id)
             bal_color = "🟢" if summary['balance'] >= 0 else "🔴"
-            msg = f"📊 *MO LIYAVIY HISOBOT (Oylik)*\n\n💵 Daromad: {summary['total_income']:,.0f} so'm\n💰 Xarajat: {summary['total_expense']:,.0f} so'm\n{bal_color} *QOLDIQ:* {summary['balance']:,.0f} so'm"
+            msg = f"📊 *MOLIYA HISOBOTI (Oylik)*\n\n💵 Daromad: {summary['total_income']:,.0f} so'm\n💰 Xarajat: {summary['total_expense']:,.0f} so'm\n{bal_color} *QOLDIQ:* {summary['balance']:,.0f} so'm"
             await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
         elif text == "🎯 BYUDJET":
@@ -825,7 +829,7 @@ class SmartAssistantBot:
             if not budgets:
                 await update.message.reply_text("🎯 *BYUDJET*\nLimit belgilanmagan.", reply_markup=ReplyKeyboardMarkup([["➕ LIMIT QO'SHISH"], ["🔙 ORQAGA"]], resize_keyboard=True))
             else:
-                res = ""
+                res = "🎯 *BYUDJET:*\n\n"
                 for b in budgets:
                     pct = (b['current_spent']/b['monthly_limit'])*100 if b['monthly_limit'] else 0
                     bar = "█"*int(pct/10) + "░"*(10-int(pct/10))
@@ -833,11 +837,11 @@ class SmartAssistantBot:
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([["➕ LIMIT QO'SHISH"], ["🔙 ORQAGA"]], resize_keyboard=True))
         
         elif text == "➕ LIMIT QO'SHISH":
-            await update.message.reply_text("🎯 *LIMIT BELGILASH*\nFormat: `Kategoriya | Limit`\nNamuna: `Transport | 1000000`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("🎯 *LIMIT BELGILASH*\nFormat: `Kategoriya | Limit`\nNamuna: `Transport | 1000000`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'SET_BUDGET'
 
         elif text == "📅 VAZIFA":
-            await update.message.reply_text("📅 *VAZIFA QO'SHISH*\nFormat: `Nomi | Vaqt`\nNamuna: `Dars | 08:30`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("📅 *VAZIFA QO'SHISH*\nFormat: `Nomi | Vaqt`\nNamuna: `Dars | 08:30`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_ACTIVITY'
         
         elif text == "📋 BUGUNGI VAZIFALAR":
@@ -897,9 +901,9 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                         cat = parts[1]
                         desc = parts[2] if len(parts) > 2 else ""
                         if self.db.add_expense(user_id, amt, cat, desc):
-                            await update.message.reply_text(f"✅ Xarajat qo'shildi: {amt:,.0f} so'm")
+                            await update.message.reply_text(f"✅ Xarajat qo'shildi: {amt:,.0f} so'm", reply_markup=self.get_main_keyboard(uid))
                     except: 
-                        await update.message.reply_text("❌ Xato format.")
+                        await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'ADD_INCOME':
@@ -910,9 +914,9 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                         cat = parts[1]
                         desc = parts[2] if len(parts) > 2 else ""
                         if self.db.add_income(user_id, amt, cat, desc):
-                            await update.message.reply_text(f"✅ Daromad qo'shildi: {amt:,.0f} so'm")
+                            await update.message.reply_text(f"✅ Daromad qo'shildi: {amt:,.0f} so'm", reply_markup=self.get_main_keyboard(uid))
                     except: 
-                        await update.message.reply_text("❌ Xato format.")
+                        await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'ADD_DEBT':
@@ -920,10 +924,11 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                 if len(parts) >= 3:
                     try:
                         name, amt, dtype = parts[0], float(parts[1].replace(',', '.')), parts[2].lower()
-                        if dtype in ['berdim', 'oldim'] and self.db.add_debt(user_id, name, amt, dtype):
-                            await update.message.reply_text(f"✅ Qayd qilindi.")
+                        dtype = 'gave' if dtype == 'berdim' else 'took' if dtype == 'oldim' else dtype
+                        if dtype in ['gave', 'took'] and self.db.add_debt(user_id, name, amt, dtype):
+                            await update.message.reply_text(f"✅ Qayd qilindi.", reply_markup=self.get_main_keyboard(uid))
                     except: 
-                        await update.message.reply_text("❌ Xato format.")
+                        await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'SET_BUDGET':
@@ -932,42 +937,49 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     try:
                         cat, amt = parts[0], float(parts[1].replace(',', '.'))
                         self.db.set_budget_limit(user_id, cat, amt)
-                        await update.message.reply_text(f"✅ Limit belgilandi.")
+                        await update.message.reply_text(f"✅ Limit belgilandi.", reply_markup=self.get_main_keyboard(uid))
                     except: 
-                        await update.message.reply_text("❌ Xato.")
+                        await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'ADD_ACTIVITY':
                 parts = [p.strip() for p in text.split('|')]
-                name, time_str = parts[0], (parts[1] if len(parts)>1 else None)
-                if self.db.add_activity(user_id, name, time_str):
-                    await update.message.reply_text("✅ Vazifa qo'shildi.")
+                if len(parts) >= 1:
+                    name = parts[0]
+                    time_str = parts[1] if len(parts) > 1 else None
+                    if self.db.add_activity(user_id, name, time_str):
+                        await update.message.reply_text("✅ Vazifa qo'shildi.", reply_markup=self.get_main_keyboard(uid))
+                    else:
+                        await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'DELETE_REMINDER':
                 try:
-                    if self.db.delete_reminder(int(text), user_id): 
-                        await update.message.reply_text("🗑️ O'chirildi.")
+                    rid = int(text)
+                    if self.db.delete_reminder(rid, user_id): 
+                        await update.message.reply_text("🗑️ O'chirildi.", reply_markup=self.get_main_keyboard(uid))
                     else: 
-                        await update.message.reply_text("❌ Topilmadi.")
+                        await update.message.reply_text("❌ Topilmadi.", reply_markup=self.get_main_keyboard(uid))
                 except: 
-                    await update.message.reply_text("❌ ID raqam kiriting.")
+                    await update.message.reply_text("❌ ID raqam kiriting.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'RETURN_DEBT':
                 try:
-                    self.db.close_debt(int(text), user_id)
-                    await update.message.reply_text("✅ Qarz yopildi.")
+                    debt_id = int(text)
+                    self.db.close_debt(debt_id, user_id)
+                    await update.message.reply_text("✅ Qarz yopildi.", reply_markup=self.get_main_keyboard(uid))
                 except: 
-                    await update.message.reply_text("❌ Xato.")
+                    await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
             
             elif action == 'COMPLETE_ACTIVITY':
                 try:
-                    self.db.complete_activity(int(text), user_id)
-                    await update.message.reply_text("✅ Bajarildi.")
+                    act_id = int(text)
+                    self.db.complete_activity(act_id, user_id)
+                    await update.message.reply_text("✅ Bajarildi.", reply_markup=self.get_main_keyboard(uid))
                 except: 
-                    await update.message.reply_text("❌ Xato.")
+                    await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
             elif action == 'CONFIRM_CLEAR':
@@ -975,11 +987,11 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     self.db.clear_all_user_data(user_id)
                     await update.message.reply_text("🗑️ Barcha ma'lumot o'chirildi.", reply_markup=self.get_main_keyboard(uid))
                 else: 
-                    await update.message.reply_text("Bekor qilindi.")
+                    await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_settings_keyboard())
                 context.user_data['action'] = None
             
             else:
-                await update.message.reply_text("Buyruq aniqlanmadi. Menyuni tanlang.")
+                await update.message.reply_text("Buyruq aniqlanmadi. Menyuni tanlang.", reply_markup=self.get_main_keyboard(uid))
 
 # ==================== FLASK APP ====================
 app = Flask(__name__)
