@@ -1,4 +1,4 @@
-# bot.py - ADMIN PANEL ALOHIDA TUGMA BILAN
+# bot.py - TO'LIQ TUZATILGAN VERSIYA
 
 import os
 import logging
@@ -19,8 +19,8 @@ from telegram.constants import ParseMode
 BOT_TOKEN = "8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw" 
 ADMIN_IDS = [8014950410]
 
-# Vaqt zonasi: Asia/Tashkent (UTC+5)
-TIMEZONE = ZoneInfo("Asia/Tashkent")
+# Vaqt zonasi: Xorazm (UTC+5) - Toshkent bilan bir xil
+TIMEZONE = ZoneInfo("Asia/Tashkent")  # Xorazm uchun ham shu ishlatiladi
 
 # ==================== LOG SOZLAMALARI ====================
 logging.basicConfig(
@@ -34,28 +34,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== DATABASE ====================
-# RENDER UCHUN: /tmp/ ichida saqlash kerak, chunki har restartda fayllar o'chadi
 DB_NAME = 'smart_assistant.db'
 
-# Python 3.12+ uchun datetime adapter sozlamalari
-def adapt_datetime(dt):
-    return dt.isoformat()
-
-def convert_datetime(text):
-    try:
-        return datetime.fromisoformat(text.decode())
-    except ValueError as e:
-        logger.warning(f"Invalid datetime format: {text!r} - {e}. Using fallback.")
-        return datetime.now()  # Fallback to current time to avoid unpack errors
-
-# Faqat shu ikki qatorni saqlang (qolganini o'chirib tashlang)
 sqlite3.register_adapter(datetime, lambda dt: dt.isoformat())
 sqlite3.register_converter("datetime", lambda b: datetime.fromisoformat(b.decode("utf-8")))
 sqlite3.register_converter("timestamp", lambda b: datetime.fromisoformat(b.decode("utf-8")))
 
 class Database:
     def __init__(self):
-        # DateTime converter bilan connection
         self.conn = sqlite3.connect(
             DB_NAME, 
             detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
@@ -153,8 +139,8 @@ class Database:
                 UNIQUE(user_id, category, month_year)
             )
         ''')
-
-        # Debts
+        
+        # Debts - TO'G'RI YARATILGAN VERSIYA
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS debts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +152,7 @@ class Database:
                 status TEXT DEFAULT 'active', 
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 return_date DATETIME,
+                due_date DATE,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -176,16 +163,13 @@ class Database:
     # --- USER METHODS ---
     def add_user(self, telegram_id: int, username: str, full_name: str):
         try:
-            # Admin IDs ro'yxatidan tekshirish
             is_admin = 1 if telegram_id in ADMIN_IDS else 0
             
-            # Avval foydalanuvchini qo'shamiz yoki mavjud bo'lsa o'zgartirmaymiz
             self.cursor.execute('''
                 INSERT OR IGNORE INTO users (telegram_id, username, full_name, is_admin, last_seen) 
                 VALUES (?, ?, ?, ?, ?)
             ''', (telegram_id, username, full_name, is_admin, datetime.now(TIMEZONE)))
             
-            # Admin holatini yangilash (agar ADMIN_IDS da bo'lsa)
             if telegram_id in ADMIN_IDS:
                 self.cursor.execute('''
                     UPDATE users 
@@ -193,7 +177,6 @@ class Database:
                     WHERE telegram_id = ?
                 ''', (username, full_name, datetime.now(TIMEZONE), telegram_id))
             else:
-                # Oddiy foydalanuvchi uchun faqat last_seen ni yangilash
                 self.cursor.execute('''
                     UPDATE users 
                     SET username = ?, full_name = ?, last_seen = ? 
@@ -232,24 +215,41 @@ class Database:
         self.cursor.execute('DELETE FROM debts WHERE user_id = ?', (user_id,))
         self.conn.commit()
 
-    # --- REMINDERS ---
+    # --- REMINDERS (YANGILANGAN) ---
     def add_reminder(self, user_id: int, title: str, description: str, reminder_time: datetime, repeat_type="none"):
         try:
             if reminder_time.tzinfo is None:
                 reminder_time = reminder_time.replace(tzinfo=TIMEZONE)
-            logger.info(f"[DEBUG] Saqlanayotgan vaqt: {reminder_time}")
-            logger.info(f"[DEBUG] Vaqt turi: {type(reminder_time)}")
-            logger.info(f"[DEBUG] Vaqt zonasi: {reminder_time.tzinfo}")
             
             self.cursor.execute('INSERT INTO reminders (user_id, title, description, reminder_time, repeat_type) VALUES (?, ?, ?, ?, ?)', 
                              (user_id, title, description, reminder_time, repeat_type))
             self.conn.commit()
-            rid = self.cursor.lastrowid
-            logger.info(f"[DEBUG] Saqlandi, ID = {rid}")
-            return rid
+            return self.cursor.lastrowid
         except Exception as e:
             logger.error(f"Reminder add error: {e}")
             return None
+
+    def get_all_reminders(self, user_id: int):
+        """Foydalanuvchining BARCHA eslatmalarini olish"""
+        self.cursor.execute('SELECT * FROM reminders WHERE user_id = ? ORDER BY reminder_time DESC', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def get_user_reminders(self, user_id: int):
+        """Faol eslatmalarni olish"""
+        self.cursor.execute('SELECT * FROM reminders WHERE user_id = ? AND status = "active" ORDER BY reminder_time ASC', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def delete_reminder(self, reminder_id: int, user_id: int):
+        """1 ta eslatmani o'chirish"""
+        self.cursor.execute('DELETE FROM reminders WHERE id = ? AND user_id = ?', (reminder_id, user_id))
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+
+    def delete_all_reminders(self, user_id: int):
+        """BARCHA eslatmalarni o'chirish"""
+        self.cursor.execute('DELETE FROM reminders WHERE user_id = ?', (user_id,))
+        self.conn.commit()
+        return self.cursor.rowcount > 0
 
     def update_reminder_time(self, rid: int, new_time: datetime):
         try:
@@ -258,16 +258,7 @@ class Database:
         except Exception as e:
             logger.error(f"Reminder update error: {e}")
 
-    def delete_reminder(self, reminder_id: int, user_id: int):
-        self.cursor.execute('DELETE FROM reminders WHERE id = ? AND user_id = ?', (reminder_id, user_id))
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-
-    def get_user_reminders(self, user_id: int):
-        self.cursor.execute('SELECT * FROM reminders WHERE user_id = ? AND status = "active" ORDER BY reminder_time ASC', (user_id,))
-        return [dict(row) for row in self.cursor.fetchall()]
-
-    # --- INCOME ---
+    # --- INCOME (YANGILANGAN) ---
     def add_income(self, user_id: int, amount: float, category: str, description: str, inc_date=None):
         try:
             if not inc_date: inc_date = date.today()
@@ -279,12 +270,32 @@ class Database:
             logger.error(f"Income add error: {e}")
             return False
 
+    def get_all_income(self, user_id: int):
+        """BARCHA daromadlarni olish"""
+        self.cursor.execute('SELECT * FROM income WHERE user_id = ? ORDER BY income_date DESC', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
     def get_user_income(self, user_id: int, days=30):
         start_date = (date.today() - timedelta(days=days)).strftime('%Y-%m-%d')
         self.cursor.execute('SELECT * FROM income WHERE user_id = ? AND income_date >= ? ORDER BY income_date DESC', (user_id, start_date))
         return [dict(row) for row in self.cursor.fetchall()]
 
-    # --- EXPENSES ---
+    def get_income_summary(self, user_id: int):
+        """Daromadlar statistikasi"""
+        self.cursor.execute('''
+            SELECT 
+                strftime("%Y-%m", income_date) as month,
+                category,
+                SUM(amount) as total,
+                COUNT(*) as count
+            FROM income 
+            WHERE user_id = ?
+            GROUP BY strftime("%Y-%m", income_date), category
+            ORDER BY month DESC, total DESC
+        ''', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    # --- EXPENSES (YANGILANGAN) ---
     def add_expense(self, user_id: int, amount: float, category: str, description: str, exp_date=None):
         try:
             if not exp_date: exp_date = date.today()
@@ -303,30 +314,100 @@ class Database:
             logger.error(f"Expense add error: {e}")
             return False
 
+    def get_all_expenses(self, user_id: int):
+        """BARCHA xarajatlarni olish"""
+        self.cursor.execute('SELECT * FROM expenses WHERE user_id = ? ORDER BY expense_date DESC', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
     def get_user_expenses(self, user_id: int, days=30):
         start_date = (date.today() - timedelta(days=days)).strftime('%Y-%m-%d')
         self.cursor.execute('SELECT * FROM expenses WHERE user_id = ? AND expense_date >= ? ORDER BY expense_date DESC', (user_id, start_date))
         return [dict(row) for row in self.cursor.fetchall()]
 
-    # --- DEBTS ---
-    def add_debt(self, user_id: int, person_name: str, amount: float, debt_type: str, description=""):
+    def get_expense_summary(self, user_id: int):
+        """Xarajatlar statistikasi"""
+        self.cursor.execute('''
+            SELECT 
+                strftime("%Y-%m", expense_date) as month,
+                category,
+                SUM(amount) as total,
+                COUNT(*) as count
+            FROM expenses 
+            WHERE user_id = ?
+            GROUP BY strftime("%Y-%m", expense_date), category
+            ORDER BY month DESC, total DESC
+        ''', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    # --- DEBTS (TO'LIQ TUZATILGAN) ---
+    def add_debt(self, user_id: int, person_name: str, amount: float, debt_type: str, description="", due_date=None):
         try:
-            self.cursor.execute('INSERT INTO debts (user_id, person_name, amount, debt_type, description) VALUES (?, ?, ?, ?, ?)', 
-                             (user_id, person_name, amount, debt_type, description))
+            # due_date ni to'g'ri formatda qabul qilish
+            if due_date and isinstance(due_date, str):
+                try:
+                    due_date = datetime.strptime(due_date, '%Y-%m-%d').date()
+                except:
+                    due_date = None
+            
+            self.cursor.execute('''
+                INSERT INTO debts (user_id, person_name, amount, debt_type, description, due_date) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user_id, person_name, amount, debt_type, description, due_date))
             self.conn.commit()
             return True
         except Exception as e:
             logger.error(f"Debt add error: {e}")
+            # Agar jadvalda due_date ustuni bo'lmasa, avtomatik qo'shish
+            try:
+                self.cursor.execute("PRAGMA table_info(debts)")
+                columns = [col[1] for col in self.cursor.fetchall()]
+                if 'due_date' not in columns:
+                    self.cursor.execute('ALTER TABLE debts ADD COLUMN due_date DATE')
+                    self.conn.commit()
+                    # Qayta urinib ko'rish
+                    return self.add_debt(user_id, person_name, amount, debt_type, description, due_date)
+            except Exception as e2:
+                logger.error(f"Debt schema fix error: {e2}")
             return False
 
     def get_user_debts(self, user_id: int):
-        self.cursor.execute('SELECT * FROM debts WHERE user_id = ? AND status = "active" ORDER BY created_at DESC', (user_id,))
+        """Faol qarzlarni olish"""
+        self.cursor.execute('''
+            SELECT * FROM debts 
+            WHERE user_id = ? AND status = "active" 
+            ORDER BY 
+                CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,
+                due_date ASC,
+                created_at DESC
+        ''', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def get_all_debts(self, user_id: int):
+        """BARCHA qarzlarni olish (tarixiy)"""
+        self.cursor.execute('SELECT * FROM debts WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
         return [dict(row) for row in self.cursor.fetchall()]
 
     def close_debt(self, debt_id: int, user_id: int):
+        """Qarzni yopish"""
         self.cursor.execute('UPDATE debts SET status = "returned", return_date = ? WHERE id = ? AND user_id = ?', 
                          (datetime.now(TIMEZONE), debt_id, user_id))
         self.conn.commit()
+
+    def get_debt_summary(self, user_id: int):
+        """Qarzlar statistikasi"""
+        self.cursor.execute('''
+            SELECT 
+                debt_type,
+                person_name,
+                SUM(amount) as total_amount,
+                COUNT(*) as count,
+                MIN(due_date) as earliest_due,
+                MAX(due_date) as latest_due
+            FROM debts 
+            WHERE user_id = ? AND status = "active"
+            GROUP BY debt_type, person_name
+        ''', (user_id,))
+        return [dict(row) for row in self.cursor.fetchall()]
 
     # --- ACTIVITIES ---
     def add_activity(self, user_id: int, name: str, time_str: str = None):
@@ -362,7 +443,30 @@ class Database:
         self.conn.commit()
 
     def get_financial_summary(self, user_id: int):
+        """Moliyaviy statistikani diagramma uchun"""
         month_year = date.today().strftime("%Y-%m")
+        
+        # Xarajatlar kategoriya bo'yicha
+        self.cursor.execute('''
+            SELECT category, SUM(amount) as total 
+            FROM expenses 
+            WHERE user_id = ? AND strftime("%Y-%m", expense_date) = ? 
+            GROUP BY category 
+            ORDER BY total DESC
+        ''', (user_id, month_year))
+        expense_by_category = [dict(row) for row in self.cursor.fetchall()]
+        
+        # Daromadlar kategoriya bo'yicha
+        self.cursor.execute('''
+            SELECT category, SUM(amount) as total 
+            FROM income 
+            WHERE user_id = ? AND strftime("%Y-%m", income_date) = ? 
+            GROUP BY category 
+            ORDER BY total DESC
+        ''', (user_id, month_year))
+        income_by_category = [dict(row) for row in self.cursor.fetchall()]
+        
+        # Jami summalar
         self.cursor.execute('SELECT SUM(amount) as total FROM expenses WHERE user_id = ? AND strftime("%Y-%m", expense_date) = ?', (user_id, month_year))
         exp_data = self.cursor.fetchone()
         total_exp = exp_data['total'] or 0
@@ -371,14 +475,25 @@ class Database:
         inc_data = self.cursor.fetchone()
         total_inc = inc_data['total'] or 0
 
-        self.cursor.execute('SELECT category, SUM(amount) as total FROM expenses WHERE user_id = ? AND strftime("%Y-%m", expense_date) = ? GROUP BY category', (user_id, month_year))
-        cats = self.cursor.fetchall()
+        # Oy davomida kunlik xarajatlar
+        self.cursor.execute('''
+            SELECT 
+                expense_date,
+                SUM(amount) as daily_total
+            FROM expenses 
+            WHERE user_id = ? AND strftime("%Y-%m", expense_date) = ?
+            GROUP BY expense_date
+            ORDER BY expense_date
+        ''', (user_id, month_year))
+        daily_expenses = [dict(row) for row in self.cursor.fetchall()]
         
         return {
-            'total_expense': total_exp,
-            'total_income': total_inc,
-            'balance': total_inc - total_exp,
-            'by_category': [dict(row) for row in cats]
+            'total_expense': float(total_exp) if total_exp else 0,
+            'total_income': float(total_inc) if total_inc else 0,
+            'balance': float(total_inc - total_exp) if total_inc and total_exp else 0,
+            'expense_by_category': expense_by_category,
+            'income_by_category': income_by_category,
+            'daily_expenses': daily_expenses
         }
 
     # --- ADMIN SPECIFIC ---
@@ -387,7 +502,6 @@ class Database:
         return [dict(row) for row in self.cursor.fetchall()]
 
     def get_recent_logins(self, limit=10):
-        """So'nggi kirgan foydalanuvchilarni olish (last_seen bo'yicha)"""
         self.cursor.execute('SELECT * FROM users ORDER BY last_seen DESC LIMIT ?', (limit,))
         return [dict(row) for row in self.cursor.fetchall()]
 
@@ -410,7 +524,14 @@ class Database:
         total_inc = self.cursor.fetchone()['t'] or 0
         self.cursor.execute('SELECT SUM(amount) as t FROM expenses')
         total_exp = self.cursor.fetchone()['t'] or 0
-        return {'users': users, 'reminders': rems, 'debts': debts, 'total_balance': total_inc - total_exp}
+        return {
+            'users': users, 
+            'reminders': rems, 
+            'debts': debts, 
+            'total_income': float(total_inc) if total_inc else 0,
+            'total_expense': float(total_exp) if total_exp else 0,
+            'total_balance': float(total_inc - total_exp) if total_inc and total_exp else 0
+        }
 
     def close(self):
         self.conn.close()
@@ -431,7 +552,7 @@ class ReminderScheduler:
         while self.running:
             try:
                 now = datetime.now(TIMEZONE)
-                logger.info(f"[SCHEDULER] {now.strftime('%Y-%m-%d %H:%M:%S')} → tekshiruv boshlandi")
+                logger.info(f"[SCHEDULER] Xorazm vaqti: {now.strftime('%Y-%m-%d %H:%M:%S')} → tekshiruv boshlandi")
 
                 self.db.cursor.execute('''
                     SELECT r.*, u.telegram_id FROM reminders r
@@ -444,7 +565,7 @@ class ReminderScheduler:
                 
                 for row in rows:
                     r = dict(row)
-                    msg = f"🔔 *ESLATMA: {r['title']}*\n📝 {r['description']}\n⏰ {r['reminder_time']}"
+                    msg = f"🔔 *ESLATMA: {r['title']}*\n📝 {r['description']}\n⏰ {r['reminder_time'].strftime('%d.%m.%Y %H:%M')} (Xorazm)"
                     logger.info(f" → Yuborilishi kerak: {r['title']} | vaqt: {r['reminder_time']} | chat_id: {r['telegram_id']}")
                     self._send_in_thread(r['telegram_id'], msg, r['id'], r['repeat_type'])
                 
@@ -515,12 +636,9 @@ class SmartAssistantBot:
         self.db = Database()
     
     def is_user_admin(self, telegram_id: int) -> bool:
-        """Foydalanuvchining admin ekanligini tekshirish"""
-        # 1. Global admin IDs ro'yxatidan tekshirish
         if telegram_id in ADMIN_IDS:
             return True
         
-        # 2. Bazadan tekshirish
         user_info = self.db.get_user_info(telegram_id)
         if user_info and user_info.get('is_admin') == 1:
             return True
@@ -528,14 +646,12 @@ class SmartAssistantBot:
         return False
 
     def get_main_keyboard(self, telegram_id: int = None):
-        """ASOSIY MENYU - Admin bo'lsa ADMIN PANEL tugmasi qo'shiladi"""
         base = [
             ["➕ ESLATMA", "💰 XARAJAT", "💵 DAROMAD"],
             ["📅 VAZIFA", "💸 QARZLARIM", "🎯 BYUDJET"],
             ["📊 HISOBOT", "⚙️ SOZLAMALAR", "🆘 YORDAM"]
         ]
         
-        # Admin uchun alohida tugma
         if telegram_id and self.is_user_admin(telegram_id):
             base.append(["👑 ADMIN PANEL"])
         
@@ -548,6 +664,27 @@ class SmartAssistantBot:
             ["🔙 ORQAGA"]
         ], resize_keyboard=True)
 
+    def get_reminders_keyboard(self):
+        """Eslatmalar uchun klaviatura"""
+        return ReplyKeyboardMarkup([
+            ["📋 BARCHA ESLATMALAR", "🗑️ O'CHIRISH"],
+            ["🔙 ORQAGA"]
+        ], resize_keyboard=True)
+
+    def get_finance_keyboard(self):
+        """Moliyaviy hisobot uchun klaviatura"""
+        return ReplyKeyboardMarkup([
+            ["📈 DIAGRAMMA", "📋 BARCHA XARAJATLAR", "📋 BARCHA DAROMADLAR"],
+            ["🔙 ORQAGA"]
+        ], resize_keyboard=True)
+
+    def get_debts_keyboard(self):
+        """Qarzlar uchun klaviatura"""
+        return ReplyKeyboardMarkup([
+            ["➕ QARZ QO'SHISH", "📋 BARCHA QARZLAR"],
+            ["📊 QARZ STATISTIKASI", "🔙 ORQAGA"]
+        ], resize_keyboard=True)
+
     async def start(self, update, context):
         user = update.effective_user
         is_admin = self.db.add_user(user.id, user.username, user.full_name)
@@ -555,7 +692,6 @@ class SmartAssistantBot:
         txt = f"👋 Salom, {user.full_name}!\n\n🤖 *Smart Assistant Bot* ga xush kelibsiz."
         if is_admin: 
             txt += "\n\n👑 Siz Admin sifatida tizimga kirdingiz."
-            # Admin statusini bazaga yozishni kuchaytiramiz
             user_info = self.db.get_user_info(user.id)
             if user_info:
                 self.db.cursor.execute('UPDATE users SET is_admin = 1 WHERE telegram_id = ?', (user.id,))
@@ -568,7 +704,6 @@ class SmartAssistantBot:
         )
 
     async def force_admin(self, update, context):
-        """Admin statusini majburiy o'rnatish"""
         uid = update.effective_user.id
         if uid in ADMIN_IDS:
             self.db.cursor.execute('UPDATE users SET is_admin = 1 WHERE telegram_id = ?', (uid,))
@@ -586,7 +721,6 @@ class SmartAssistantBot:
             await update.message.reply_text("Xatolik. Iltimos /start bosing.")
             return
 
-        # Admin statusini yangi funksiya orqali tekshirish
         is_admin_status = self.is_user_admin(uid)
         
         logger.info(f"[MESSAGE] Foydalanuvchi: {uid}, Matn: {text}, User_data: {context.user_data}")
@@ -601,7 +735,283 @@ class SmartAssistantBot:
             await update.message.reply_text("⚙️ *SOZLAMALAR*", reply_markup=self.get_settings_keyboard(), parse_mode=ParseMode.MARKDOWN)
             return
 
-        # ================= ADMIN PANEL LOGICASI =================
+        # ================= ESLATMALAR (YANGI) =================
+        elif text == "➕ ESLATMA":
+            context.user_data.clear()
+            await update.message.reply_text(
+                "📝 *ESLATMALAR MENYUSI*",
+                reply_markup=ReplyKeyboardMarkup([
+                    ["➕ YANGI ESLATMA", "📋 BARCHA ESLATMALAR"],
+                    ["🗑️ O'CHIRISH", "🔙 ORQAGA"]
+                ], resize_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        elif text == "📋 BARCHA ESLATMALAR":
+            reminders = self.db.get_all_reminders(user_id)
+            if not reminders:
+                await update.message.reply_text("📭 Hech qanday eslatma yo'q.", reply_markup=self.get_reminders_keyboard())
+            else:
+                res = "📋 *BARCHA ESLATMALAR:*\n\n"
+                for r in reminders:
+                    status_icon = "🟢" if r['status'] == 'active' else "🔴"
+                    repeat_icon = "🔁" if r['repeat_type'] == 'daily' else "📅"
+                    time_str = r['reminder_time'].strftime('%d.%m.%Y %H:%M')
+                    res += f"{status_icon} *{r['title']}*\n"
+                    if r['description']:
+                        res += f"📝 {r['description']}\n"
+                    res += f"⏰ {time_str} {repeat_icon} (Xorazm)\n"
+                    res += f"🆔 ID: `{r['id']}`\n"
+                    res += "─" * 20 + "\n"
+                
+                res += "\n🗑️ *O'chirish uchun ID raqamini yuboring*"
+                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_reminders_keyboard())
+                context.user_data['action'] = 'DELETE_REMINDER'
+            return
+        
+        elif text == "🗑️ O'CHIRISH" and context.user_data.get('action') == 'DELETE_REMINDER':
+            await update.message.reply_text(
+                "🗑️ *ESLATMA O'CHIRISH*\n\n"
+                "1️⃣ *1 ta eslatmani o'chirish:* ID raqamini yuboring\n"
+                "2️⃣ *Barcha eslatmalarni o'chirish:* `HAMMASI` deb yozing\n\n"
+                "⚠️ *Diqqat:* Bu amalni qaytarib bo'lmaydi!",
+                reply_markup=ReplyKeyboardMarkup([["🔙 BEKOR QILISH"]], resize_keyboard=True),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            context.user_data['action'] = 'DELETE_REMINDER_CONFIRM'
+            return
+        
+        elif text == "➕ YANGI ESLATMA":
+            context.user_data.clear()
+            context.user_data['rem_step'] = 1
+            await update.message.reply_text("🔔 *Yangi eslatma qo'shish*\n\n1-qadam. Eslatma *nomini* yozing:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # ================= MOLIYAVIY HISOBOT (YANGI) =================
+        elif text == "📊 HISOBOT":
+            await update.message.reply_text(
+                "📊 *MOLIYAVIY HISOBOT MENYUSI*",
+                reply_markup=self.get_finance_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        elif text == "📈 DIAGRAMMA":
+            summary = self.db.get_financial_summary(user_id)
+            
+            # Xarajatlar diagrammasi
+            if summary['expense_by_category']:
+                expense_chart = "📉 *XARAJATLAR (Kategoriya bo'yicha):*\n\n"
+                for item in summary['expense_by_category']:
+                    percentage = (item['total'] / summary['total_expense'] * 100) if summary['total_expense'] > 0 else 0
+                    bar = "█" * int(percentage / 5) + "░" * (20 - int(percentage / 5))
+                    # Formatni to'g'ri qilish
+                    amount_formatted = f"{item['total']:,.0f}"
+                    expense_chart += f"🏷️ *{item['category']}*: {amount_formatted} so'm\n"
+                    expense_chart += f"{bar} {percentage:.1f}%\n\n"
+            else:
+                expense_chart = "📭 Xarajatlar yo'q\n\n"
+            
+            # Daromadlar diagrammasi
+            if summary['income_by_category']:
+                income_chart = "📈 *DAROMADLAR (Kategoriya bo'yicha):*\n\n"
+                for item in summary['income_by_category']:
+                    percentage = (item['total'] / summary['total_income'] * 100) if summary['total_income'] > 0 else 0
+                    bar = "█" * int(percentage / 5) + "░" * (20 - int(percentage / 5))
+                    amount_formatted = f"{item['total']:,.0f}"
+                    income_chart += f"🏷️ *{item['category']}*: {amount_formatted} so'm\n"
+                    income_chart += f"{bar} {percentage:.1f}%\n\n"
+            else:
+                income_chart = "📭 Daromadlar yo'q\n\n"
+            
+            # Umumiy statistikalar
+            bal_color = "🟢" if summary['balance'] >= 0 else "🔴"
+            
+            # Formatlangan raqamlarni alohida oling
+            total_income_fmt = f"{summary['total_income']:,.0f}"
+            total_expense_fmt = f"{summary['total_expense']:,.0f}"
+            balance_fmt = f"{summary['balance']:,.0f}"
+            
+            total_stats = f"💰 *UMUMIY STATISTIKA:*\n\n"
+            total_stats += f"💵 Jami daromad: *{total_income_fmt}* so'm\n"
+            total_stats += f"💰 Jami xarajat: *{total_expense_fmt}* so'm\n"
+            total_stats += f"{bal_color} Qoldiq: *{balance_fmt}* so'm\n\n"
+            
+            final_message = total_stats + expense_chart + income_chart
+            
+            # HTML parse mode bilan jo'natish, chunki Markdown bilan formatlashda muammo
+            await update.message.reply_text(
+                final_message, 
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.get_finance_keyboard()
+            )
+            return
+        
+        elif text == "📋 BARCHA XARAJATLAR":
+            expenses = self.db.get_all_expenses(user_id)
+            if not expenses:
+                await update.message.reply_text("📭 Xarajatlar yo'q.", reply_markup=self.get_finance_keyboard())
+            else:
+                res = "💰 *BARCHA XARAJATLAR:*\n\n"
+                total = 0
+                for exp in expenses:
+                    total += exp['amount']
+                    res += f"📅 *{exp['expense_date']}*\n"
+                    res += f"🏷️ Kategoriya: {exp['category']}\n"
+                    res += f"💸 Miqdor: {exp['amount']:,.0f} so'm\n"
+                    if exp['description']:
+                        res += f"📝 Tavsif: {exp['description']}\n"
+                    res += f"🆔 ID: `{exp['id']}`\n"
+                    res += "─" * 20 + "\n"
+                
+                res += f"\n💰 *Jami xarajat: {total:,.0f} so'm*"
+                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_finance_keyboard())
+            return
+        
+        elif text == "📋 BARCHA DAROMADLAR":
+            incomes = self.db.get_all_income(user_id)
+            if not incomes:
+                await update.message.reply_text("📭 Daromadlar yo'q.", reply_markup=self.get_finance_keyboard())
+            else:
+                res = "💵 *BARCHA DAROMADLAR:*\n\n"
+                total = 0
+                for inc in incomes:
+                    total += inc['amount']
+                    res += f"📅 *{inc['income_date']}*\n"
+                    res += f"🏷️ Manba: {inc['category']}\n"
+                    res += f"💰 Miqdor: {inc['amount']:,.0f} so'm\n"
+                    if inc['description']:
+                        res += f"📝 Tavsif: {inc['description']}\n"
+                    res += f"🆔 ID: `{inc['id']}`\n"
+                    res += "─" * 20 + "\n"
+                
+                res += f"\n💰 *Jami daromad: {total:,.0f} so'm*"
+                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_finance_keyboard())
+            return
+
+        # ================= QARZLAR (YANGILANGAN) =================
+        elif text == "💸 QARZLARIM":
+            await update.message.reply_text(
+                "💸 *QARZLAR MENYUSI*",
+                reply_markup=self.get_debts_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        elif text == "📋 BARCHA QARZLAR":
+            debts = self.db.get_all_debts(user_id)
+            if not debts:
+                await update.message.reply_text("📭 Qarzlar yo'q.", reply_markup=self.get_debts_keyboard())
+            else:
+                res = "💸 *BARCHA QARZLAR:*\n\n"
+                active_total = 0
+                returned_total = 0
+                
+                for d in debts:
+                    status_icon = "🟢" if d['status'] == 'active' else "✅"
+                    type_icon = "📤" if d['debt_type'] == 'gave' else "📥"
+                    type_text = "Berdingiz" if d['debt_type'] == 'gave' else "Oldingiz"
+                    
+                    res += f"{status_icon} {type_icon} *{d['person_name']}*\n"
+                    res += f"💰 Miqdor: {d['amount']:,.0f} so'm\n"
+                    res += f"📋 Turi: {type_text}\n"
+                    
+                    if d['due_date']:
+                        due_date = d['due_date']
+                        if isinstance(due_date, str):
+                            due_date = datetime.strptime(due_date, '%Y-%m-%d')
+                        due_str = due_date.strftime('%d.%m.%Y')
+                        res += f"📅 Muddat: {due_str}\n"
+                    
+                    if d['status'] == 'returned' and d['return_date']:
+                        return_date = d['return_date']
+                        if isinstance(return_date, str):
+                            return_date = datetime.fromisoformat(return_date)
+                        return_str = return_date.strftime('%d.%m.%Y %H:%M')
+                        res += f"✅ Qaytarildi: {return_str}\n"
+                    
+                    if d['description']:
+                        res += f"📝 Izoh: {d['description']}\n"
+                    
+                    res += f"🆔 ID: `{d['id']}`\n"
+                    res += "─" * 20 + "\n"
+                    
+                    if d['status'] == 'active':
+                        active_total += d['amount']
+                    else:
+                        returned_total += d['amount']
+                
+                res += f"\n📊 *Statistika:*\n"
+                res += f"🟢 Faol qarzlar: {active_total:,.0f} so'm\n"
+                res += f"✅ Qaytarilgan: {returned_total:,.0f} so'm\n"
+                res += f"💰 Jami: {(active_total + returned_total):,.0f} so'm\n\n"
+                res += "🔐 *Qaytarish uchun ID raqamini yuboring*"
+                
+                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_debts_keyboard())
+                context.user_data['action'] = 'RETURN_DEBT'
+            return
+        
+        elif text == "📊 QARZ STATISTIKASI":
+            summary = self.db.get_debt_summary(user_id)
+            if not summary:
+                await update.message.reply_text("📭 Qarz statistikasi yo'q.", reply_markup=self.get_debts_keyboard())
+            else:
+                res = "📊 *QARZ STATISTIKASI:*\n\n"
+                
+                gave_total = 0
+                took_total = 0
+                
+                for item in summary:
+                    if item['debt_type'] == 'gave':
+                        gave_total += item['total_amount']
+                        icon = "📤"
+                        type_text = "Berilgan"
+                    else:
+                        took_total += item['total_amount']
+                        icon = "📥"
+                        type_text = "Olingan"
+                    
+                    res += f"{icon} *{item['person_name']}* ({type_text})\n"
+                    res += f"💰 Miqdor: {item['total_amount']:,.0f} so'm\n"
+                    res += f"📋 Qarzlar soni: {item['count']}\n"
+                    
+                    if item['earliest_due']:
+                        earliest = item['earliest_due']
+                        latest = item['latest_due']
+                        if isinstance(earliest, str):
+                            earliest = datetime.strptime(earliest, '%Y-%m-%d').strftime('%d.%m')
+                            latest = datetime.strptime(latest, '%Y-%m-%d').strftime('%d.%m')
+                        res += f"📅 Muddat: {earliest} - {latest}\n"
+                    
+                    res += "─" * 15 + "\n"
+                
+                res += f"\n📈 *UMUMIY:*\n"
+                res += f"📤 Berilgan: {gave_total:,.0f} so'm\n"
+                res += f"📥 Olingan: {took_total:,.0f} so'm\n"
+                res += f"⚖️ Farq: {(took_total - gave_total):,.0f} so'm\n"
+                
+                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_debts_keyboard())
+            return
+        
+        elif text == "➕ QARZ QO'SHISH":
+            await update.message.reply_text(
+                "🆕 *QARZ QO'SHISH*\n\n"
+                "📝 *Format:* `Ism | Miqdor | Turi | Muddat | Izoh`\n"
+                "📋 *Namuna 1:* `Ali | 500000 | berdim | 15.12.2024 | Mahsulot uchun`\n"
+                "📋 *Namuna 2:* `Vali | 300000 | oldim | 20.12.2024 | Qarz berdi`\n\n"
+                "ℹ️ *Eslatma:*\n"
+                "- Turi: `berdim` yoki `oldim`\n"
+                "- Muddat: `DD.MM.YYYY` (ixtiyoriy)\n"
+                "- Izoh: (ixtiyoriy)",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=ReplyKeyboardRemove()
+            )
+            context.user_data['action'] = 'ADD_DEBT'
+            return
+
+        # ================= ADMIN PANEL =================
         if text == "👑 ADMIN PANEL":
             if is_admin_status:
                 stats = self.db.get_bot_stats()
@@ -612,7 +1022,6 @@ class SmartAssistantBot:
                 msg += f"💰 Bot balansi: {stats['total_balance']:,.0f} so'm\n\n"
                 msg += "Boshqaruv bo'limini tanlang:"
                 
-                # Admin klaviaturasi
                 await update.message.reply_text(
                     msg, parse_mode=ParseMode.MARKDOWN,
                     reply_markup=ReplyKeyboardMarkup([
@@ -628,7 +1037,6 @@ class SmartAssistantBot:
 
         # Admin Panel ichidagi harakatlar
         if context.user_data.get('admin_mode'):
-            # 1. Foydalanuvchilar ro'yxati
             if text == "👥 FOYDALANUVCHILAR":
                 users = self.db.get_all_users()
                 if not users: 
@@ -644,7 +1052,6 @@ class SmartAssistantBot:
                     await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
                 return
             
-            # 2. So'nggi kirishlar
             elif text == "🕒 SO'NGGI KIRISHLAR":
                 users = self.db.get_recent_logins(10)
                 if not users: 
@@ -659,7 +1066,6 @@ class SmartAssistantBot:
                     await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
                 return
             
-            # 3. Profil ko'rish (ID orqali)
             elif text.isdigit():
                 target_id = int(text)
                 stats = self.db.get_user_stats_by_id(target_id)
@@ -678,7 +1084,6 @@ class SmartAssistantBot:
                     await update.message.reply_text("❌ Topilmadi.")
                 return
             
-            # 4. Xabar yuborish
             elif text == "📢 XABAR YUBORISH":
                 await update.message.reply_text("✍️ Barchaga xabarni yozing:")
                 context.user_data['broadcasting'] = True
@@ -698,7 +1103,6 @@ class SmartAssistantBot:
                 context.user_data['broadcasting'] = False
                 return
             
-            # 5. Global Statistika
             elif text == "📊 GLOBAL STATISTIKA":
                 stats = self.db.get_bot_stats()
                 res = f"📊 *GLOBAL STATISTIKA*\n\n"
@@ -709,7 +1113,6 @@ class SmartAssistantBot:
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
                 return
             
-            # 6. Asosiy menyuga qaytish
             elif text == "🔙 ASOSIY MENYU":
                 context.user_data.clear()
                 await update.message.reply_text("Asosiy menyu", reply_markup=self.get_main_keyboard(uid))
@@ -733,14 +1136,7 @@ class SmartAssistantBot:
             await update.message.reply_text("✅ Language changed: English", reply_markup=self.get_settings_keyboard())
             return
 
-        # ================= ESLATMA QO'SHISH =================
-        elif text == "➕ ESLATMA":
-            context.user_data.clear()
-            context.user_data['rem_step'] = 1
-            await update.message.reply_text("🔔 *Yangi eslatma qo'shish*\n\n1-qadam. Eslatma *nomini* yozing:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Bekor qilish"]], resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
-            return
-
+        # ================= ESLATMA QO'SHISH (DAVOMI) =================
         if 'rem_step' in context.user_data:
             step = context.user_data['rem_step']
             if text == "🔙 Bekor qilish":
@@ -782,7 +1178,7 @@ class SmartAssistantBot:
                 title = context.user_data.get('rem_title')
                 rtime = context.user_data.get('rem_time')
                 if self.db.add_reminder(user_id, title, "", rtime, repeat):
-                    msg = f"✅ *Eslatma saqlandi!*\n\n📌 {title}\n⏰ {rtime.strftime('%d.%m %H:%M')}"
+                    msg = f"✅ *Eslatma saqlandi!*\n\n📌 {title}\n⏰ {rtime.strftime('%d.%m %H:%M')} (Xorazm)"
                     if repeat == 'daily': 
                         msg += "\n🔁 Har kuni takrorlanadi"
                     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=self.get_main_keyboard(uid))
@@ -791,39 +1187,19 @@ class SmartAssistantBot:
                 context.user_data.clear()
                 return
 
-        # ================= OTHER FEATURES =================
-        elif text == "💸 QARZLARIM":
-            debts = self.db.get_user_debts(user_id)
-            if not debts:
-                await update.message.reply_text("📭 Qarzlar yo'q.", reply_markup=ReplyKeyboardMarkup([["➕ QARZ QO'SHISH"], ["🔙 ORQAGA"]], resize_keyboard=True))
-            else:
-                res = "💸 *QARZLAR:*\n\n"
-                for d in debts:
-                    icon = "📤" if d['debt_type'] == 'gave' else "📥"
-                    type_txt = "Berdingiz" if d['debt_type'] == 'gave' else "Oldingiz"
-                    res += f"{icon} *{d['person_name']}*: {d['amount']:,.0f} so'm ({type_txt}) | ID: `{d['id']}`\n\n"
-                res += "Qaytarish uchun ID ni yuboring."
-                await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([["➕ QARZ QO'SHISH"], ["🔙 ORQAGA"]], resize_keyboard=True))
-                context.user_data['action'] = 'RETURN_DEBT'
-        
-        elif text == "➕ QARZ QO'SHISH":
-            await update.message.reply_text("🆕 *QARZ QO'SHISH*\n\nFormat: `Ism | Miqdor | Turi`\nTuri: `berdim` yoki `oldim`\nNamuna: `Ali | 500000 | berdim`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
-            context.user_data['action'] = 'ADD_DEBT'
-
+        # ================= XARAJAT QO'SHISH =================
         elif text == "💰 XARAJAT":
             await update.message.reply_text("💰 *XARAJAT QO'SHISH*\n\nFormat: `Miqdor | Kategoriya | Tavsif`\nNamuna: `50000 | Taom | Lagmon`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_EXPENSE'
+            return
 
+        # ================= DAROMAD QO'SHISH =================
         elif text == "💵 DAROMAD":
             await update.message.reply_text("💵 *DAROMAD QO'SHISH*\n\nFormat: `Miqdor | Manba | Tavsif`\nNamuna: `1000000 | Oylik Maosh | IT`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_INCOME'
+            return
         
-        elif text == "📊 HISOBOT":
-            summary = self.db.get_financial_summary(user_id)
-            bal_color = "🟢" if summary['balance'] >= 0 else "🔴"
-            msg = f"📊 *MOLIYA HISOBOTI (Oylik)*\n\n💵 Daromad: {summary['total_income']:,.0f} so'm\n💰 Xarajat: {summary['total_expense']:,.0f} so'm\n{bal_color} *QOLDIQ:* {summary['balance']:,.0f} so'm"
-            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
+        # ================= BYUDJET =================
         elif text == "🎯 BYUDJET":
             budgets = self.db.get_budgets(user_id)
             if not budgets:
@@ -835,14 +1211,18 @@ class SmartAssistantBot:
                     bar = "█"*int(pct/10) + "░"*(10-int(pct/10))
                     res += f"📂 {b['category']}\n{bar} {pct:.0f}%\n{b['current_spent']:,.0f} / {b['monthly_limit']:,.0f}\n\n"
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([["➕ LIMIT QO'SHISH"], ["🔙 ORQAGA"]], resize_keyboard=True))
+            return
         
         elif text == "➕ LIMIT QO'SHISH":
             await update.message.reply_text("🎯 *LIMIT BELGILASH*\nFormat: `Kategoriya | Limit`\nNamuna: `Transport | 1000000`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'SET_BUDGET'
+            return
 
+        # ================= VAZIFALAR =================
         elif text == "📅 VAZIFA":
             await update.message.reply_text("📅 *VAZIFA QO'SHISH*\nFormat: `Nomi | Vaqt`\nNamuna: `Dars | 08:30`", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardRemove())
             context.user_data['action'] = 'ADD_ACTIVITY'
+            return
         
         elif text == "📋 BUGUNGI VAZIFALAR":
             acts = self.db.get_activities(user_id)
@@ -857,7 +1237,9 @@ class SmartAssistantBot:
                 res += "\nBajarilganini belgilash uchun ID ni yuboring."
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
                 context.user_data['action'] = 'COMPLETE_ACTIVITY'
+            return
 
+        # ================= ESLATMALARIM =================
         elif text == "🔔 ESLATMALARIM":
             rems = self.db.get_user_reminders(user_id)
             if not rems: 
@@ -866,34 +1248,74 @@ class SmartAssistantBot:
                 res = "🔔 *ESLATMALAR:*\n\n"
                 for r in rems:
                     rep = "🔁" if r['repeat_type'] == 'daily' else "📅"
-                    res += f"{rep} *{r['title']}* - {r['reminder_time']}\n   ID: `{r['id']}`\n\n"
+                    res += f"{rep} *{r['title']}* - {r['reminder_time'].strftime('%d.%m.%Y %H:%M')} (Xorazm)\n   ID: `{r['id']}`\n\n"
                 res += "O'chirish uchun ID ni yuboring."
                 await update.message.reply_text(res, parse_mode=ParseMode.MARKDOWN)
-                context.user_data['action'] = 'DELETE_REMINDER'
+                context.user_data['action'] = 'DELETE_REMINDER_SINGLE'
+            return
 
-        # ================= YORDAM / SOS TUGMASI =================
+        # ================= YORDAM =================
         elif text == "🆘 YORDAM":
             help_text = """
 🆘 *YORDAM MENYUSI*
 
 Botdan foydalanish bo'yicha qo'llanma:
+
+📝 *ESLATMALAR:*
 - ➕ ESLATMA: Yangi eslatma qo'shish
+- 📋 BARCHA ESLATMALAR: Barcha eslatmalarni ko'rish
+- 🗑️ O'CHIRISH: Eslatmalarni o'chirish
+
+💰 *MOLIYA:*
 - 💰 XARAJAT: Xarajatlarni kiritish
 - 💵 DAROMAD: Daromadlarni kiritish
-- 📅 VAZIFA: Kunlik vazifalarni boshqarish
-- 💸 QARZLARIM: Qarzlarni kuzatish
-- 🎯 BYUDJET: Byudjetni belgilash
-- 📊 HISOBOT: Moliyaviy hisobot
-- ⚙️ SOZLAMALAR: Til va valyutani o'zgartirish
+- 📊 HISOBOT: Moliyaviy hisobot va diagrammalar
+- 📋 BARCHA XARAJATLAR/DAROMADLAR: Tarixni ko'rish
 
-Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning.
+💸 *QARZLAR:*
+- ➕ QARZ QO'SHISH: Yangi qarz qo'shish
+- 📋 BARCHA QARZLAR: Barcha qarzlarni ko'rish
+- 📊 QARZ STATISTIKASI: Statistik ma'lumotlar
+
+🎯 *BYUDJET:*
+- ➕ LIMIT QO'SHISH: Byudjet limitini belgilash
+
+📅 *VAZIFALAR:*
+- 📅 VAZIFA: Kunlik vazifalarni boshqarish
+- 📋 BUGUNGI VAZIFALAR: Bugungi vazifalarni ko'rish
+
+⚙️ *SOZLAMALAR:*
+- Til va valyutani o'zgartirish
+- Barcha ma'lumotlarni o'chirish
+
+Agar muammo bo'lsa, /start buyrug'ini qayta yuboring.
             """
             await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
+        # ================= ACTION HANDLERS =================
         else:
             action = context.user_data.get('action')
             
-            if action == 'ADD_EXPENSE':
+            # ESLATMA O'CHIRISH (HAMMASI)
+            if action == 'DELETE_REMINDER_CONFIRM':
+                if text.upper() == 'HAMMASI':
+                    count = self.db.delete_all_reminders(user_id)
+                    await update.message.reply_text(f"✅ Barcha eslatmalar o'chirildi ({count} ta)", reply_markup=self.get_main_keyboard(uid))
+                elif text == "🔙 BEKOR QILISH":
+                    await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_reminders_keyboard())
+                else:
+                    try:
+                        rid = int(text)
+                        if self.db.delete_reminder(rid, user_id): 
+                            await update.message.reply_text("✅ Eslatma o'chirildi.", reply_markup=self.get_main_keyboard(uid))
+                        else: 
+                            await update.message.reply_text("❌ Topilmadi.", reply_markup=self.get_reminders_keyboard())
+                    except: 
+                        await update.message.reply_text("❌ ID raqam kiriting.", reply_markup=self.get_reminders_keyboard())
+                context.user_data['action'] = None
+            
+            # XARAJAT QO'SHISH
+            elif action == 'ADD_EXPENSE':
                 parts = [p.strip() for p in text.split('|')]
                 if len(parts) >= 2:
                     try:
@@ -906,6 +1328,7 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                         await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # DAROMAD QO'SHISH
             elif action == 'ADD_INCOME':
                 parts = [p.strip() for p in text.split('|')]
                 if len(parts) >= 2:
@@ -919,29 +1342,71 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                         await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # QARZ QO'SHISH (TO'G'RI FORMAT)
             elif action == 'ADD_DEBT':
                 parts = [p.strip() for p in text.split('|')]
                 if len(parts) >= 3:
                     try:
-                        name, amt, dtype = parts[0], float(parts[1].replace(',', '.')), parts[2].lower()
-                        dtype = 'gave' if dtype == 'berdim' else 'took' if dtype == 'oldim' else dtype
-                        if dtype in ['gave', 'took'] and self.db.add_debt(user_id, name, amt, dtype):
-                            await update.message.reply_text(f"✅ Qayd qilindi.", reply_markup=self.get_main_keyboard(uid))
-                    except: 
-                        await update.message.reply_text("❌ Xato format.", reply_markup=self.get_main_keyboard(uid))
+                        name = parts[0]
+                        amt = float(parts[1].replace(',', '.'))
+                        dtype = parts[2].lower()
+                        
+                        # Muddatni o'qish
+                        due_date = None
+                        if len(parts) >= 4 and parts[3]:
+                            try:
+                                # DD.MM.YYYY formatini YYYY-MM-DD formatiga o'tkazish
+                                due_date_str = parts[3]
+                                due_date_obj = datetime.strptime(due_date_str, "%d.%m.%Y")
+                                due_date = due_date_obj.strftime('%Y-%m-%d')
+                            except Exception as e:
+                                logger.error(f"Due date parsing error: {e}")
+                                due_date = None
+                        
+                        # Izohni o'qish
+                        description = ""
+                        if len(parts) >= 5:
+                            description = parts[4]
+                        
+                        # Turini to'g'ri formatda qilish
+                        if dtype == 'berdim':
+                            debt_type = 'gave'
+                        elif dtype == 'oldim':
+                            debt_type = 'took'
+                        else:
+                            debt_type = dtype  # Agar allaqachon 'gave' yoki 'took' bo'lsa
+                        
+                        if self.db.add_debt(user_id, name, amt, debt_type, description, due_date):
+                            msg = f"✅ Qarz qo'shildi:\n👤 {name}\n💰 {amt:,.0f} so'm\n"
+                            msg += f"📋 {'Berdingiz' if debt_type == 'gave' else 'Oldingiz'}\n"
+                            if due_date:
+                                msg += f"📅 Muddat: {parts[3]}\n"
+                            if description:
+                                msg += f"📝 Izoh: {description}"
+                            
+                            await update.message.reply_text(msg, reply_markup=self.get_main_keyboard(uid))
+                        else:
+                            await update.message.reply_text("❌ Qarz qo'shishda xatolik.", reply_markup=self.get_main_keyboard(uid))
+                    except Exception as e:
+                        logger.error(f"Debt add error: {e}")
+                        await update.message.reply_text(f"❌ Xato format yoki tizim xatosi: {str(e)}", reply_markup=self.get_main_keyboard(uid))
+                else:
+                    await update.message.reply_text("❌ Format noto'g'ri. Format: `Ism | Miqdor | Turi | Muddat | Izoh`", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # BYUDJET LIMITI
             elif action == 'SET_BUDGET':
                 parts = [p.strip() for p in text.split('|')]
                 if len(parts) >= 2:
                     try:
                         cat, amt = parts[0], float(parts[1].replace(',', '.'))
                         self.db.set_budget_limit(user_id, cat, amt)
-                        await update.message.reply_text(f"✅ Limit belgilandi.", reply_markup=self.get_main_keyboard(uid))
+                        await update.message.reply_text(f"✅ Limit belgilandi: {cat} → {amt:,.0f} so'm", reply_markup=self.get_main_keyboard(uid))
                     except: 
                         await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # VAZIFA QO'SHISH
             elif action == 'ADD_ACTIVITY':
                 parts = [p.strip() for p in text.split('|')]
                 if len(parts) >= 1:
@@ -953,7 +1418,8 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                         await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
-            elif action == 'DELETE_REMINDER':
+            # ESLATMA O'CHIRISH (1 TA)
+            elif action == 'DELETE_REMINDER_SINGLE':
                 try:
                     rid = int(text)
                     if self.db.delete_reminder(rid, user_id): 
@@ -964,6 +1430,7 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     await update.message.reply_text("❌ ID raqam kiriting.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # QARZ QAYTARISH
             elif action == 'RETURN_DEBT':
                 try:
                     debt_id = int(text)
@@ -973,6 +1440,7 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
             
+            # VAZIFA BAJARILDI
             elif action == 'COMPLETE_ACTIVITY':
                 try:
                     act_id = int(text)
@@ -982,6 +1450,7 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     await update.message.reply_text("❌ Xato.", reply_markup=self.get_main_keyboard(uid))
                 context.user_data['action'] = None
 
+            # BARCHASINI O'CHIRISH
             elif action == 'CONFIRM_CLEAR':
                 if text.upper() == 'HA':
                     self.db.clear_all_user_data(user_id)
@@ -990,6 +1459,7 @@ Agar muammo bo'lsa, /start buyrug'ini qayta yuboring yoki admin bilan bog'laning
                     await update.message.reply_text("Bekor qilindi.", reply_markup=self.get_settings_keyboard())
                 context.user_data['action'] = None
             
+            # BOSHQA HARAKAT
             else:
                 await update.message.reply_text("Buyruq aniqlanmadi. Menyuni tanlang.", reply_markup=self.get_main_keyboard(uid))
 
@@ -1014,11 +1484,12 @@ scheduler.start()
 
 print("🤖 Bot Flask + Polling rejimida ishga tushmoqda...")
 print(f"👑 Admin ID: {ADMIN_IDS[0]}")
+print(f"⏰ Vaqt zonasi: Xorazm (Asia/Tashkent)")
 
 # ==================== FLASK ENDPOINTS ====================
 @app.route('/')
 def home():
-    return "🤖 Smart Assistant Bot ishlayapti! ✅"
+    return "🤖 Smart Assistant Bot ishlayapti! ✅ (Xorazm vaqti)"
 
 @app.route('/health')
 def health():
@@ -1028,13 +1499,11 @@ def health():
 if __name__ == '__main__':
     import signal
     
-    # Signal handler sozlamalari (Python 3.13 uchun)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     
     port = int(os.environ.get('PORT', 10000))
     
-    # Flask ni background threadda ishga tushirish
     def run_flask():
         from waitress import serve
         serve(app, host='0.0.0.0', port=port, threads=1)
@@ -1045,7 +1514,6 @@ if __name__ == '__main__':
     print(f"🌐 Flask server: http://0.0.0.0:{port}")
     print("🤖 Telegram bot polling ishga tushmoqda...")
     
-    # Botni asosiy threadda ishga tushirish
     try:
         telegram_app.run_polling(
             drop_pending_updates=True,
@@ -1059,7 +1527,6 @@ if __name__ == '__main__':
         print("\n🛑 Bot to'xtatildi")
     except Exception as e:
         print(f"❌ Xato: {e}")
-        # Qayta urinish
         import time
         time.sleep(5)
         telegram_app.run_polling(
