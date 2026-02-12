@@ -695,40 +695,53 @@ class Database:
                 """,
                 (user_id,)
             )
+            
             reminders = []
-            for row in self.cursor.fetchall():
+            rows = self.cursor.fetchall()
+            
+            for row in rows:
                 reminder = dict(row)
-                # repeat_days ni JSON dan o'qish
-# repeat_days ni JSON dan o'qish - TO'LIQ ISHONCHLI
+                
+                # repeat_days ni JSON dan o'qish - SODDA VA ISHONCHLI
                 if reminder.get('repeat_days'):
                     try:
+                        # Agar string bo'lsa
                         if isinstance(reminder['repeat_days'], str):
                             reminder['repeat_days'] = json.loads(reminder['repeat_days'])
+                        # Agar list bo'lsa
+                        elif isinstance(reminder['repeat_days'], list):
+                            pass
+                        # Agar bytes bo'lsa
                         elif isinstance(reminder['repeat_days'], bytes):
                             reminder['repeat_days'] = json.loads(reminder['repeat_days'].decode('utf-8'))
                         else:
                             reminder['repeat_days'] = []
                     except:
-                            reminder['repeat_days'] = []
+                        reminder['repeat_days'] = []
+                else:
+                    reminder['repeat_days'] = []
                 
-                # next_reminder ni datetime ga o'tkazish
-                if reminder.get('next_reminder') and isinstance(reminder['next_reminder'], str):
+                # reminder_time ni datetime ga o'tkazish
+                if reminder.get('reminder_time'):
                     try:
-                        reminder['next_reminder'] = datetime.fromisoformat(reminder['next_reminder'].replace(' ', 'T'))
+                        if isinstance(reminder['reminder_time'], str):
+                            reminder['reminder_time'] = datetime.fromisoformat(reminder['reminder_time'].replace(' ', 'T'))
                     except:
                         pass
                 
-                # reminder_time ni datetime ga o'tkazish
-                if reminder.get('reminder_time') and isinstance(reminder['reminder_time'], str):
+                # next_reminder ni datetime ga o'tkazish
+                if reminder.get('next_reminder'):
                     try:
-                        reminder['reminder_time'] = datetime.fromisoformat(reminder['reminder_time'].replace(' ', 'T'))
+                        if isinstance(reminder['next_reminder'], str):
+                            reminder['next_reminder'] = datetime.fromisoformat(reminder['next_reminder'].replace(' ', 'T'))
                     except:
                         pass
                 
                 reminders.append(reminder)
+            
             return reminders
         except Exception as e:
-            logger.error(f"Get user reminders error: {e}")
+            logger.error(f"❌ Get user reminders error: {e}")
             return []
     
     def delete_reminder(self, reminder_id: int, user_id: int) -> bool:
