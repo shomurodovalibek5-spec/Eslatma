@@ -682,17 +682,12 @@ class Database:
         return base_time
     
     def get_user_reminders(self, user_id: int) -> List[dict]:
-        """Foydalanuvchi eslatmalarini olish"""
+        """Foydalanuvchi eslatmalarini olish - TO'LIQ TUZATILGAN"""
         try:
             self.cursor.execute(
                 """SELECT * FROM reminders 
                 WHERE user_id = ? AND status = 'active' 
-                ORDER BY 
-                    CASE 
-                        WHEN repeat_type != 'none' AND next_reminder IS NOT NULL THEN next_reminder 
-                        ELSE reminder_time 
-                    END
-                """,
+                ORDER BY reminder_time ASC""",
                 (user_id,)
             )
             
@@ -702,40 +697,22 @@ class Database:
             for row in rows:
                 reminder = dict(row)
                 
-                # repeat_days ni JSON dan o'qish - SODDA VA ISHONCHLI
+                # repeat_days ni oddiy usulda o'qish
                 if reminder.get('repeat_days'):
                     try:
-                        # Agar string bo'lsa
+                        # Stringdan JSON ni o'qish
                         if isinstance(reminder['repeat_days'], str):
-                            reminder['repeat_days'] = json.loads(reminder['repeat_days'])
-                        # Agar list bo'lsa
-                        elif isinstance(reminder['repeat_days'], list):
-                            pass
-                        # Agar bytes bo'lsa
-                        elif isinstance(reminder['repeat_days'], bytes):
-                            reminder['repeat_days'] = json.loads(reminder['repeat_days'].decode('utf-8'))
+                            data = reminder['repeat_days']
+                            if data and data != 'null':
+                                reminder['repeat_days'] = json.loads(data)
+                            else:
+                                reminder['repeat_days'] = []
                         else:
                             reminder['repeat_days'] = []
                     except:
                         reminder['repeat_days'] = []
                 else:
                     reminder['repeat_days'] = []
-                
-                # reminder_time ni datetime ga o'tkazish
-                if reminder.get('reminder_time'):
-                    try:
-                        if isinstance(reminder['reminder_time'], str):
-                            reminder['reminder_time'] = datetime.fromisoformat(reminder['reminder_time'].replace(' ', 'T'))
-                    except:
-                        pass
-                
-                # next_reminder ni datetime ga o'tkazish
-                if reminder.get('next_reminder'):
-                    try:
-                        if isinstance(reminder['next_reminder'], str):
-                            reminder['next_reminder'] = datetime.fromisoformat(reminder['next_reminder'].replace(' ', 'T'))
-                    except:
-                        pass
                 
                 reminders.append(reminder)
             
