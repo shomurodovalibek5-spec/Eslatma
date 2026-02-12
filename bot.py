@@ -31,6 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+
 # ==================== KONSTANTALAR ====================
 WEEKDAYS_UZ = {
     0: "Dushanba",
@@ -697,21 +699,17 @@ class Database:
             for row in self.cursor.fetchall():
                 reminder = dict(row)
                 # repeat_days ni JSON dan o'qish
+# repeat_days ni JSON dan o'qish - TO'LIQ ISHONCHLI
                 if reminder.get('repeat_days'):
                     try:
                         if isinstance(reminder['repeat_days'], str):
                             reminder['repeat_days'] = json.loads(reminder['repeat_days'])
-                        elif isinstance(reminder['repeat_days'], list):
-                            pass
                         elif isinstance(reminder['repeat_days'], bytes):
                             reminder['repeat_days'] = json.loads(reminder['repeat_days'].decode('utf-8'))
                         else:
                             reminder['repeat_days'] = []
-                    except Exception as e:
-                        logger.error(f"Error parsing repeat_days: {e}")
-                        reminder['repeat_days'] = []
-                else:
-                    reminder['repeat_days'] = []
+                    except:
+                            reminder['repeat_days'] = []
                 
                 # next_reminder ni datetime ga o'tkazish
                 if reminder.get('next_reminder') and isinstance(reminder['next_reminder'], str):
@@ -4271,9 +4269,10 @@ class ReminderScheduler:
 
 
 # ==================== ASOSIY ====================
+# ==================== ASOSIY ====================
 def main():
     print("=" * 60)
-    print("🤖 Smart Assistant Bot - MUKAMMAL VERSIYA")
+    print("🤖 Smart Assistant Bot - WINDOWS VERSIYA")
     print("=" * 60)
     print(f"👑 Admin ID: {ADMIN_IDS}")
     print(f"⏰ Timezone: {TIMEZONE}")
@@ -4284,32 +4283,50 @@ def main():
         db = Database()
         bot_handler = BotHandler(db)
         
-        application = Application.builder().token(BOT_TOKEN).build()
+        # Windows uchun - lock faylni bot papkasiga yaratish
+        lock_file = 'bot.lock'  # Shu papkada bot.lock fayl yaratiladi
         
-        application.add_handler(CommandHandler("start", bot_handler.start))
-        application.add_handler(CommandHandler("help", bot_handler.show_help))
-        application.add_handler(CallbackQueryHandler(bot_handler.handle_callback))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_handler.handle_message))
-        
-        scheduler = ReminderScheduler(db, BOT_TOKEN)
-        scheduler.start()
-        
-        print("✅ Bot muvaffaqiyatli yuklandi!")
-        print("🔄 Polling ishga tushmoqda...")
-        print("=" * 60)
-        
-        application.run_polling(
-            drop_pending_updates=True,
-            timeout=30,
-            close_loop=False
-        )
-        
+        if not os.path.exists(lock_file):
+            # Lock fayl yaratish
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+            print("✅ Lock fayl yaratildi")
+            
+            application = Application.builder().token(BOT_TOKEN).build()
+            
+            application.add_handler(CommandHandler("start", bot_handler.start))
+            application.add_handler(CommandHandler("help", bot_handler.show_help))
+            application.add_handler(CallbackQueryHandler(bot_handler.handle_callback))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_handler.handle_message))
+            
+            scheduler = ReminderScheduler(db, BOT_TOKEN)
+            scheduler.start()
+            
+            print("✅ Bot muvaffaqiyatli yuklandi!")
+            print("🔄 Polling ishga tushmoqda...")
+            print("=" * 60)
+            print("⚠️  Botni to'xtatish uchun: Ctrl+C bosing")
+            print("=" * 60)
+            
+            application.run_polling(drop_pending_updates=True)
+        else:
+            print("⚠️ Bot allaqachon ishlamoqda!")
+            print(f"   Lock fayl mavjud: {lock_file}")
+            print("   Agar bot ishlamayotgan bo'lsa, bot.lock faylini o'chirib qayta ishga tushiring.")
+            
     except Exception as e:
         print(f"❌ Xatolik: {e}")
         import traceback
         traceback.print_exc()
         
     finally:
+        # Lock faylni o'chirish
+        if os.path.exists('bot.lock'):
+            try:
+                os.remove('bot.lock')
+                print("✅ Lock fayl o'chirildi")
+            except:
+                pass
         if db:
             db.close()
         print("🤖 Bot to'xtatildi.")
