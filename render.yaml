@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: eslatma-bot
+    name: smart-assistant-bot
+    runtime: python
+    plan: free
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: python bot.py
     envVars:
-      - key: PORT
-        value: 8080
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.11.0
