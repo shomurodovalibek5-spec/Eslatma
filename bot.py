@@ -16,12 +16,12 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 
 # ==================== KONFIGURATSIYA ====================
-BOT_TOKEN = os.environ.get('BOT_TOKEN', "8289853358:AAEJsNKO3_v_IPbXjTx5VrYeddn5a426aFg")
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get('ADMIN_IDS', "8014950410").split(',')]
 TIMEZONE = ZoneInfo("Asia/Tashkent")
 
 # Render uchun ma'lumotlar bazasi fayli
-DB_NAME = 'data/smart_assistant.db'
+DB_NAME = 'smart_assistant.db'
 
 # Data papkasini yaratish
 os.makedirs('data', exist_ok=True)
