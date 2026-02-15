@@ -10,4 +10,5 @@ services:
       - key: ADMIN_IDS
         value: 8014950410
       - key: RENDER
-        value: true
+        value: 1
+
