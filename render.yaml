@@ -1,6 +1,6 @@
 services:
-  - type: worker
-    name: smart-assistant-bot
+  - type: web
+    name: Eslatma-bot
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
@@ -11,4 +11,5 @@ services:
         value: 8014950410
       - key: RENDER
         value: 1
+
 
