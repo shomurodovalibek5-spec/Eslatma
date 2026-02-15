@@ -5097,19 +5097,8 @@ def main():
         print("⚠️  Botni to'xtatish uchun: Ctrl+C bosing")
         print("=" * 60)
         
-        # Render uchun - webhook yoki polling
-        if os.environ.get('RENDER'):
-            # Renderda webhook ishlatish
-            PORT = int(os.environ.get('PORT', 8080))
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=BOT_TOKEN,
-                webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{BOT_TOKEN}"
-            )
-        else:
-            # Lokalda polling
-            application.run_polling(drop_pending_updates=True)
+        # Polling rejimida ishga tushirish
+        application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
         print(f"❌ Xatolik: {e}")
