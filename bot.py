@@ -16,12 +16,12 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 
 # ==================== KONFIGURATSIYA ====================
-BOT_TOKEN = os.environ.get('BOT_TOKEN', "8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw")
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8289853358:AAEJsNKO3_v_IPbXjTx5VrYeddn5a426aFg")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get('ADMIN_IDS', "8014950410").split(',')]
 TIMEZONE = ZoneInfo("Asia/Tashkent")
 
 # Render uchun ma'lumotlar bazasi fayli
-DB_NAME = 'smart_assistant.db'
+DB_NAME = 'data/smart_assistant.db'
 
 # Data papkasini yaratish
 os.makedirs('data', exist_ok=True)
@@ -2129,6 +2129,16 @@ class BotHandler:
     
     def get_text(self, user_id: int, key: str, **kwargs) -> str:
         """Foydalanuvchi tilidagi matnni qaytarish"""
+        # Agar user_id mavjud bo'lmasa, o'zbek tilini ishlatish
+        if not user_id:
+            text = LANGUAGES['uz'].get(key, key)
+            if kwargs:
+                try:
+                    text = text.format(**kwargs)
+                except:
+                    pass
+            return text
+            
         lang = self.db.get_user_language(user_id)
         text = LANGUAGES.get(lang, LANGUAGES['uz']).get(key, key)
         if kwargs:
@@ -2163,8 +2173,14 @@ class BotHandler:
     def get_language_keyboard(self):
         """Til tanlash keyboard"""
         keyboard = []
-        for lang_code, lang_data in LANGUAGES.items():
-            keyboard.append([InlineKeyboardButton(lang_data['name'], callback_data=f"lang_{lang_code}")])
+        # To'g'ri tillar nomlari bilan
+        languages = [
+            ('🇺🇿 Uzbek', 'uz'),
+            ('🇬🇧 English', 'en'),
+            ('🇷🇺 Русский', 'ru')
+        ]
+        for lang_name, lang_code in languages:
+            keyboard.append([InlineKeyboardButton(lang_name, callback_data=f"lang_{lang_code}")])
         return InlineKeyboardMarkup(keyboard)
     
     def get_reminder_type_keyboard(self, user_id: int):
@@ -2321,10 +2337,16 @@ class BotHandler:
     def get_language_select_keyboard(self, user_id: int):
         """Til tanlash keyboard"""
         keyboard = []
-        for lang_code, lang_data in LANGUAGES.items():
-            keyboard.append([lang_data['name']])
-        keyboard.append([self.get_text(user_id, 'back')])
-        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        # To'g'ri tillar nomlari bilan
+        languages = [
+            ('Uzbek', 'uz'),
+            ('English', 'en'),
+            ('Russian', 'ru')
+        ]
+        for lang_name, lang_code in languages:
+            keyboard.append([InlineKeyboardButton(lang_name, callback_data=f"lang_{lang_code}")])
+        keyboard.append([InlineKeyboardButton(self.get_text(user_id, 'back'), callback_data="lang_back")])
+        return InlineKeyboardMarkup(keyboard)
     
     def get_debts_keyboard(self, user_id: int):
         """Qarzlar keyboard"""
@@ -2475,16 +2497,25 @@ class BotHandler:
     
     # Foydalanuvchi ID sini olish
         db_user = self.db.get_user_by_telegram_id(user.id)
+        
+        # Agar foydalanuvchi topilmasa, yangi yaratish
         if not db_user:
-            # Agar foydalanuvchi topilmasa, start ga qaytish
-            await query.message.delete()
-            await self.start(update, context)
-            return ConversationHandler.END
-    
+            # Yangi foydalanuvchini yaratish
+            db_user = self.db.get_or_create_user(
+                telegram_id=user.id,
+                username=user.username or "",
+                full_name=user.full_name or "",
+                language='uz'  # Default
+            )
+        
         user_id = db_user['id']
     
     # Til tanlash
         if data.startswith("lang_"):
+            if data == "lang_back":
+                await query.message.delete()
+                return await self.start(update, context)
+                
             lang_code = data.replace("lang_", "")
         
         # Foydalanuvchini yangilash
@@ -2506,7 +2537,7 @@ class BotHandler:
                 reply_markup=self.get_main_keyboard(user_id),
                 parse_mode=ParseMode.MARKDOWN
             )
-            return MAIN_MENU
+            return ConversationHandler.END
     
     # Hafta kunlari tanlash
         elif data.startswith("wday_") or data in ["weekday_done", "weekday_cancel"]:
@@ -4452,19 +4483,19 @@ class BotHandler:
         users = self.db.get_all_users()
     
         message = f"""
-    👥 *{self.get_text(user_id, 'users')}*
+👥 *{self.get_text(user_id, 'users')}*
 
-    📊 *{self.get_text(user_id, 'total')}:* {len(users)} ta
+📊 *{self.get_text(user_id, 'total')}:* {len(users)} ta
 
-    📋 *{self.get_text(user_id, 'last_10')}:*
-        """
+📋 *{self.get_text(user_id, 'last_10')}:*
+"""
     
-        for user_data in users[:10]:
+        for user_data in users:  # Barcha foydalanuvchilarni ko'rsatish
             admin = "👑 " if user_data.get('is_admin') else ""
             block = "🚫 " if user_data.get('is_blocked') else ""
             username = f"@{user_data['username']}" if user_data['username'] else "no username"
         
-        # registered_at datetime obyektini string ga aylantirish
+            # registered_at datetime obyektini string ga aylantirish
             registered_at = user_data['registered_at']
             if isinstance(registered_at, datetime):
                 registered_str = registered_at.strftime('%Y-%m-%d')
@@ -4474,7 +4505,7 @@ class BotHandler:
             message += f"\n{admin}{block}*{user_data['full_name']}*\n"
             message += f"   📱 {username}\n"
             message += f"   🆔 `{user_data['telegram_id']}`\n"
-            message += f"   📅 {registered_str}"
+            message += f"   📅 {registered_str}\n"
     
         await update.message.reply_text(
             message,
@@ -4583,8 +4614,8 @@ class BotHandler:
 {"👑 Admin" if user_data['is_admin'] else "👤 Foydalanuvchi"}
 {"🚫 Bloklangan" if user_data.get('is_blocked') else "✅ Faol"}
 
-📅 *Roʻyxatdan oʻtgan:* {user_data['registered_at'][:16]}
-⏰ *Oxirgi faollik:* {user_data['last_seen'][:16]}
+📅 *Roʻyxatdan oʻtgan:* {user_data['registered_at'].strftime('%Y-%m-%d %H:%M') if isinstance(user_data['registered_at'], datetime) else str(user_data['registered_at'])[:16]}
+⏰ *Oxirgi faollik:* {user_data['last_seen'].strftime('%Y-%m-%d %H:%M') if isinstance(user_data['last_seen'], datetime) else str(user_data['last_seen'])[:16]}
 
 📊 *Statistika:*
 • Eslatmalar: {stats['total_reminders']} ta (faol: {stats['active_reminders']})
@@ -4658,9 +4689,12 @@ class BotHandler:
                 success_count += 1
                 
                 if i % 10 == 0:
-                    await status_msg.edit_text(
-                        f"⏳ Xabar yuborilmoqda... {i}/{len(users)}"
-                    )
+                    try:
+                        await status_msg.edit_text(
+                            f"⏳ Xabar yuborilmoqda... {i}/{len(users)}"
+                        )
+                    except Exception:
+                        pass  # Xabar o'zgartirilmasa ham davom etish
                 
                 await asyncio.sleep(0.05)
                 
@@ -4668,16 +4702,34 @@ class BotHandler:
                 error_count += 1
                 logger.error(f"Broadcast error to {user_data['telegram_id']}: {e}")
         
-        await status_msg.edit_text(
-            f"✅ *Xabar yuborildi!*\n\n"
-            f"📊 *Natija:*\n"
-            f"• Yuborildi: {success_count}\n"
-            f"• Bloklangan: {blocked_count}\n"
-            f"• Xatolik: {error_count}\n"
-            f"• Jami: {len(users)}",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        try:
+            await status_msg.edit_text(
+                f"✅ *Xabar yuborildi!*\n\n"
+                f"📊 *Natija:*\n"
+                f"• Yuborildi: {success_count}\n"
+                f"• Bloklangan: {blocked_count}\n"
+                f"• Xatolik: {error_count}\n"
+                f"• Jami: {len(users)}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            # Agar status xabari o'zgartirilmasa, yangi xabar yuborish
+            await update.message.reply_text(
+                f"✅ *Xabar yuborildi!*\n\n"
+                f"📊 *Natija:*\n"
+                f"• Yuborildi: {success_count}\n"
+                f"• Bloklangan: {blocked_count}\n"
+                f"• Xatolik: {error_count}\n"
+                f"• Jami: {len(users)}",
+                parse_mode=ParseMode.MARKDOWN
+            )
         
+        # Menyuga qaytish
+        await update.message.reply_text(
+            "👑 *ADMIN PANEL*",
+            reply_markup=self.get_admin_keyboard(admin_id)
+        )
+        context.user_data.clear()  # State ni tozalash
         return ADMIN_MENU
     
     async def admin_block_start(self, update: Update, user_id: int):
@@ -4743,7 +4795,7 @@ class BotHandler:
         message = "📋 *ADMIN HARAKATLARI*\n\n"
         
         for log in logs[:10]:
-            date = log['created_at'][:16]
+            date = log['created_at'].strftime('%Y-%m-%d %H:%M') if isinstance(log['created_at'], datetime) else str(log['created_at'])[:16]
             admin = log['admin_name'] or str(log['admin_id'])
             
             action_text = {
