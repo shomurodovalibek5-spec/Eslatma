@@ -1,10 +1,13 @@
 services:
-  - type: web
+  - type: worker
     name: smart-assistant-bot
-    runtime: python
-    plan: free
+    env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      - key: BOT_TOKEN
+        value: 8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw
+      - key: ADMIN_IDS
+        value: 8014950410
+      - key: RENDER
+        value: true
