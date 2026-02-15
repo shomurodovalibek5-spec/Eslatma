@@ -1,15 +1,11 @@
 services:
   - type: web
-    name: Eslatma-bot
+    name: eslatma-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python main.py
     envVars:
-      - key: BOT_TOKEN
-        value: 8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw
-      - key: ADMIN_IDS
-        value: 8014950410
-      - key: RENDER
-        value: 1
-
-
+      - key: PORT
+        value: 8080
+      - key: PYTHON_VERSION
+        value: 3.11
