@@ -25,7 +25,7 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get('ADMIN_IDS', "8014950410")
 TIMEZONE = ZoneInfo("Asia/Tashkent")
 
 # Render uchun ma'lumotlar bazasi fayli
-DB_NAME = 'data/smart_assistant.db'
+DB_NAME = 'smart_assistant.db'
 
 # Data papkasini yaratish
 os.makedirs('data', exist_ok=True)
@@ -5166,8 +5166,7 @@ def main():
             db.close()
         print("🤖 Bot to'xtatildi.")
 
-# ==================== FLASK WEBHOOK ====================
-# ==================== FLASK HEALTH CHECK ====================
+# ==================== FLASK HEALTH CHECK (THREADDA) ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -5190,11 +5189,27 @@ def ping():
     """Ping endpoint"""
     return 'pong'
 
-# Bot thread funksiyasi
-def run_bot():
-    """Botni alohida threadda ishga tushirish"""
+def run_flask():
+    """Flask ni alohida threadda ishga tushirish"""
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🚀 Flask server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+# ==================== ASOSIY POLLING ====================
+def main():
+    print("=" * 60)
+    print("🤖 Smart Assistant Bot - RENDER WEB SERVICE (POLLING MODE)")
+    print("=" * 60)
+    print(f"👑 Admin ID: {ADMIN_IDS}")
+    print(f"⏰ Timezone: {TIMEZONE}")
+    print(f"📁 Database: {DB_NAME}")
+    print("=" * 60)
+    
     try:
-        logger.info("🚀 Starting bot thread...")
+        # Flask ni alohida threadda ishga tushirish
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        logger.info("✅ Flask thread started")
         
         # Database yaratish
         db = Database()
@@ -5217,33 +5232,18 @@ def run_bot():
         logger.info("✅ Bot muvaffaqiyatli yuklandi!")
         logger.info("🔄 Polling ishga tushmoqda...")
         
-        # Polling rejimida ishga tushirish
+        # Polling rejimida ishga tushirish (ASOSIY THREADDA)
         application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
-        logger.error(f"❌ Bot thread xatolik: {e}")
+        logger.error(f"❌ Xatolik: {e}")
         import traceback
         traceback.print_exc()
-
-# ==================== ASOSIY ====================
-def main():
-    print("=" * 60)
-    print("🤖 Smart Assistant Bot - RENDER WEB SERVICE (POLLING MODE)")
-    print("=" * 60)
-    print(f"👑 Admin ID: {ADMIN_IDS}")
-    print(f"⏰ Timezone: {TIMEZONE}")
-    print(f"📁 Database: {DB_NAME}")
-    print("=" * 60)
-    
-    # Botni alohida threadda ishga tushirish
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("✅ Bot thread started")
-    
-    # Flask ni ishga tushirish (health check uchun)
-    port = int(os.environ.get('PORT', 5000))
-    logger.info(f"🚀 Flask server starting on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+        
+    finally:
+        if 'db' in locals():
+            db.close()
+        print("🤖 Bot to'xtatildi.")
 
 if __name__ == '__main__':
     main()
