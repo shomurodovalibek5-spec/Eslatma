@@ -15,13 +15,17 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKey
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler
 from telegram.constants import ParseMode
 
+# Flask uchun
+from flask import Flask, request, jsonify
+import threading
+
 # ==================== KONFIGURATSIYA ====================
 BOT_TOKEN = os.environ.get('BOT_TOKEN', "8250421622:AAHpa6q_RMV1d3QNO4tM3YtT9h2jYJebvjw")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get('ADMIN_IDS', "8014950410").split(',')]
 TIMEZONE = ZoneInfo("Asia/Tashkent")
 
 # Render uchun ma'lumotlar bazasi fayli
-DB_NAME = 'smart_assistant.db'
+DB_NAME = 'data/smart_assistant.db'
 
 # Data papkasini yaratish
 os.makedirs('data', exist_ok=True)
@@ -5161,6 +5165,85 @@ def main():
         if db:
             db.close()
         print("🤖 Bot to'xtatildi.")
+
+# ==================== FLASK WEBHOOK ====================
+# ==================== FLASK HEALTH CHECK ====================
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    """Asosiy sahifa - health check"""
+    return jsonify({
+        'status': 'running',
+        'mode': 'polling',
+        'time': datetime.now().isoformat(),
+        'bot': 'Smart Assistant Bot is working!'
+    })
+
+@app.route('/health')
+def health():
+    """Health check endpoint - Render uchun"""
+    return jsonify({'status': 'healthy'}), 200
+
+@app.route('/ping')
+def ping():
+    """Ping endpoint"""
+    return 'pong'
+
+# Bot thread funksiyasi
+def run_bot():
+    """Botni alohida threadda ishga tushirish"""
+    try:
+        logger.info("🚀 Starting bot thread...")
+        
+        # Database yaratish
+        db = Database()
+        bot_handler = BotHandler(db)
+        
+        # Application yaratish
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # ConversationHandler qo'shish
+        conv_handler = get_conversation_handler(bot_handler)
+        application.add_handler(conv_handler)
+        
+        # Qolgan handlerlar
+        application.add_handler(CallbackQueryHandler(bot_handler.handle_callback))
+        
+        # Scheduler ishga tushirish
+        scheduler = ReminderScheduler(db, BOT_TOKEN)
+        scheduler.start()
+        
+        logger.info("✅ Bot muvaffaqiyatli yuklandi!")
+        logger.info("🔄 Polling ishga tushmoqda...")
+        
+        # Polling rejimida ishga tushirish
+        application.run_polling(drop_pending_updates=True)
+        
+    except Exception as e:
+        logger.error(f"❌ Bot thread xatolik: {e}")
+        import traceback
+        traceback.print_exc()
+
+# ==================== ASOSIY ====================
+def main():
+    print("=" * 60)
+    print("🤖 Smart Assistant Bot - RENDER WEB SERVICE (POLLING MODE)")
+    print("=" * 60)
+    print(f"👑 Admin ID: {ADMIN_IDS}")
+    print(f"⏰ Timezone: {TIMEZONE}")
+    print(f"📁 Database: {DB_NAME}")
+    print("=" * 60)
+    
+    # Botni alohida threadda ishga tushirish
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    logger.info("✅ Bot thread started")
+    
+    # Flask ni ishga tushirish (health check uchun)
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🚀 Flask server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 if __name__ == '__main__':
     main()
