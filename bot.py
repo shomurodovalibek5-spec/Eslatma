@@ -4484,38 +4484,58 @@ class BotHandler:
     
     async def admin_users(self, update: Update, user_id: int):
         """Foydalanuvchilar ro'yxati"""
-        users = self.db.get_all_users()
-    
-        message = f"""
-👥 *{self.get_text(user_id, 'users')}*
-
-📊 *{self.get_text(user_id, 'total')}:* {len(users)} ta
-
-📋 *{self.get_text(user_id, 'last_10')}:*
-"""
-    
-        for user_data in users:  # Barcha foydalanuvchilarni ko'rsatish
-            admin = "👑 " if user_data.get('is_admin') else ""
-            block = "🚫 " if user_data.get('is_blocked') else ""
-            username = f"@{user_data['username']}" if user_data['username'] else "no username"
+        try:
+            users = self.db.get_all_users()
         
-            # registered_at datetime obyektini string ga aylantirish
-            registered_at = user_data['registered_at']
-            if isinstance(registered_at, datetime):
-                registered_str = registered_at.strftime('%Y-%m-%d')
-            else:
-                registered_str = str(registered_at)[:10]
+            if not users:
+                await update.message.reply_text(
+                    "❌ Hozircha foydalanuvchilar yo'q.",
+                    reply_markup=self.get_admin_keyboard(user_id)
+                )
+                return ADMIN_MENU
+            
+            # Xabarni qisqartirish (Telegram limiti ~4096 belgi)
+            message = f"👥 *FOYDALANUVCHILAR*\n\n📊 *Jami:* {len(users)} ta\n\n📋 *Ro'yxat:*\n"
+            
+            # Barcha foydalanuvchilarni ko'rsatish (xabar uzunligini nazorat qilish)
+            displayed_count = 0
+            for i, user_data in enumerate(users):
+                if len(message) > 3500:  # Xavfsizlik uchun limit
+                    break
+                    
+                admin = "👑 " if user_data.get('is_admin') else ""
+                block = "🚫 " if user_data.get('is_blocked') else ""
+                username = f"@{user_data['username']}" if user_data['username'] else "yo'q"
+            
+                # Sanani formatlash
+                try:
+                    if isinstance(user_data['registered_at'], datetime):
+                        registered_str = user_data['registered_at'].strftime('%Y-%m-%d')
+                    else:
+                        registered_str = str(user_data['registered_at'])[:10]
+                except:
+                    registered_str = "Noma'lum"
+                
+                message += f"\n{admin}{block}*{user_data['full_name']}*\n"
+                message += f"📱 {username}\n"
+                message += f"🆔 `{user_data['telegram_id']}`\n"
+                message += f"📅 {registered_str}\n"
+                displayed_count += 1
         
-            message += f"\n{admin}{block}*{user_data['full_name']}*\n"
-            message += f"   📱 {username}\n"
-            message += f"   🆔 `{user_data['telegram_id']}`\n"
-            message += f"   📅 {registered_str}\n"
-    
-        await update.message.reply_text(
-            message,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=self.get_admin_keyboard(user_id)
-        )
+            if displayed_count < len(users):
+                message += f"\n... va yana {len(users) - displayed_count} ta foydalanuvchi"
+            
+            await update.message.reply_text(
+                message,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.get_admin_keyboard(user_id)
+            )
+        except Exception as e:
+            logger.error(f"Admin users error: {e}")
+            await update.message.reply_text(
+                "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+                reply_markup=self.get_admin_keyboard(user_id)
+            )
         return ADMIN_MENU
     
     async def admin_search_start(self, update: Update, user_id: int):
